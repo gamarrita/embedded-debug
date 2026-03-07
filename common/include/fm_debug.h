@@ -12,6 +12,15 @@ typedef enum
     FM_DEBUG_LED_ON  = 1
 } fm_debug_led_state_t;
 
+typedef enum
+{
+    FM_DEBUG_ERR_NONE = 0,
+    FM_DEBUG_ERR_JITTER,
+    FM_DEBUG_ERR_OVERRUN,
+    FM_DEBUG_ERR_TIMEOUT,
+    FM_DEBUG_ERR_COUNT
+} fm_debug_error_t;
+
 /* ===== Public API ===== */
 
 /**
@@ -29,7 +38,7 @@ void FM_DEBUG_LedError(fm_debug_led_state_t state);
 /**
  * @brief Drives the activity LED.
  */
-void FM_DEBUG_LedActive(fm_debug_led_state_t state);
+void FM_DEBUG_LedRun(fm_debug_led_state_t state);
 
 /**
  * @brief Drives the signal LED.
@@ -69,28 +78,42 @@ bool FM_DEBUG_MsgIsEnabled(void);
  */
 bool FM_DEBUG_LedsAreEnabled(void);
 
+/**
+ * @brief Re-reads the debug enable jumpers with low-power sampling.
+ *
+ * @note Leaves the pins in analog/no-pull after reading.
+ */
+void FM_DEBUG_RefreshJumpers(void);
+
+/**
+ * @brief Registers an error occurrence (ISR-safe, non-blocking).
+ */
+void FM_DEBUG_ReportError(fm_debug_error_t err);
+
+/**
+ * @brief Returns how many times a given error was detected.
+ */
+uint32_t FM_DEBUG_ErrorCount(fm_debug_error_t err);
+
+/**
+ * @brief Returns the last error detected (or FM_DEBUG_ERR_NONE).
+ */
+fm_debug_error_t FM_DEBUG_LastError(void);
+
+/**
+ * @brief Bitmask of errors seen since the last clear.
+ */
+uint32_t FM_DEBUG_ErrorMask(void);
+
+/**
+ * @brief Clears counters and mask; turns off the error LED.
+ */
+void FM_DEBUG_ClearErrors(void);
 
 /* ===== Compile-time control ===== */
 
 /* Use only these macros from application code to honor the jumper state */
 
-/* UART helpers */
-#define FM_DEBUG_UART_MSG(buf) \
-    do { if (FM_DEBUG_MsgIsEnabled()) FM_DEBUG_UartMsg((buf), (strlen(buf))); } while (0)
-#define FM_DEBUG_UART_UINT32(x) \
-    do { if (FM_DEBUG_MsgIsEnabled()) FM_DEBUG_UartUint32((x)); } while (0)
-#define FM_DEBUG_UART_INT32(x) \
-    do { if (FM_DEBUG_MsgIsEnabled()) FM_DEBUG_UartInt32((x)); } while (0)
-#define FM_DEBUG_UART_FLOAT(x) \
-    do { if (FM_DEBUG_MsgIsEnabled()) FM_DEBUG_UartFloat((x)); } while (0)
-
-/* LED helpers */
-#define FM_DEBUG_LED_ERROR(state) \
-    do { if (FM_DEBUG_LedsAreEnabled()) FM_DEBUG_LedError((state)); } while (0)
-#define FM_DEBUG_LED_ACTIVE(state) \
-    do { if (FM_DEBUG_LedsAreEnabled()) FM_DEBUG_LedActive((state)); } while (0)
-#define FM_DEBUG_LED_SIGNAL(state) \
-    do { if (FM_DEBUG_LedsAreEnabled()) FM_DEBUG_LedSignal((state)); } while (0)
 
 
 #endif /* FM_DEBUG_H */

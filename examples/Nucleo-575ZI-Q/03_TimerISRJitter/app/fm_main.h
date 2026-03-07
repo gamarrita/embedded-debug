@@ -55,6 +55,10 @@ void FM_MAIN_Init(void);
  */
 void FM_MAIN_Main(void);
 
+void FM_TIM7_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
+
+
+
 #endif /* FM_MAIN_H_ */
 
 /*** end of file ***/
