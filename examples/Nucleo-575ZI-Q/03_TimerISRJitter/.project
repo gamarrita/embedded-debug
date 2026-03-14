@@ -37,5 +37,10 @@
 			<type>2</type>
 			<location>D:/githubs/embedded-debug/common</location>
 		</link>
+		<link>
+			<name>nucleo-u575iz-q</name>
+			<type>2</type>
+			<location>D:/githubs/embedded-debug/board/nucleo-u575iz-q</location>
+		</link>
 	</linkedResources>
 </projectDescription>

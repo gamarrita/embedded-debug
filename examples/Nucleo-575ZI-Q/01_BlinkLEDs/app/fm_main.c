@@ -66,11 +66,5 @@ void FM_MAIN_Main(void)
 /* =========================== Interrupts =================================== */
 
 
-void FM_MAIN_OnRtcWakeup(void)
-{
-	char msg[] = "Wake Up Timer callback\n";
-
-	FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
-}
 
 /*** end of file ***/

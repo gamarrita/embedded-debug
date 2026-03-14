@@ -1,5 +1,4 @@
 #include "fm_board_gpio.h"
-
 #include "main.h"
 
 /* Private Prototypes */

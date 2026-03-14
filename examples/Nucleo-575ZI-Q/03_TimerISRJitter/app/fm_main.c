@@ -13,22 +13,26 @@
  */
 
 /* ===========================     Includes    ============================== */
-#include "main.h"
-#include "string.h"
+#include "fm_main.h"
 #include "fm_debug.h"
+#include "fm_board_gpio.h"
+#include "fm_board_timers.h"
+#include "fm_board_uart.h"
+#include "fm_board_dwt.h"
+#include "string.h"
 #include "stm32u5xx_ll_rcc.h"
 
 /* =========================== Private Defines ============================== */
 
 /* Module configuration */
-#define CPU_CYCLES_PER_US    (24U)
-
 /* =========================== Private Types ================================ */
 /* (none) */
 
 /* =========================== Private Data ================================= */
 TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim7;
+static uint32_t cycles_per_us = 0U;
+static uint32_t period_cycles = 0U;
 
 /* =========================== Private Prototypes =========================== */
 /* (none) */
@@ -42,9 +46,13 @@ void FM_MAIN_Init(void)
 {
     /* Application-level initialization.
      * Keep this module as the owner of the main control flow. */
-
-    FM_DEBUG_Init();
-
+	FM_BOARD_GPIO_Init();
+	FM_BOARD_TIMERS_Init();
+	FM_BOARD_UART_Init();
+	(void) FM_BOARD_DWT_Init();
+	cycles_per_us = FM_BOARD_DWT_CyclesPerUs();
+	period_cycles = FM_BOARD_DWT_GetCpuHz() / 1000U; /* 1 ms worth of cycles */
+	FM_DEBUG_Init();
 }
 
 /* Main execution loop.
@@ -59,6 +67,8 @@ void FM_MAIN_Main(void)
 
     FM_MAIN_Init();
 
+
+
     /*
      * TIM6: reference timer at 1 kHz used to measure interrupt jitter.
      * Deviation versus the ideal 1 ms period is computed in its ISR using DWT.
@@ -70,7 +80,7 @@ void FM_MAIN_Main(void)
 
     if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
     {
-        Error_Handler();
+        //Error_Handler();
     }
 
     HAL_TIM_Base_Start(&htim6);
@@ -91,7 +101,7 @@ void FM_MAIN_Main(void)
 
     if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
     {
-        Error_Handler();
+      //  Error_Handler();
     }
 
     HAL_TIM_Base_Start(&htim7);
@@ -125,11 +135,11 @@ void TIM6_IRQHandler(void)
 {
     static uint32_t prev_tick_cycles = 0;
     static uint8_t has_reference = 0;
-    const uint32_t period_cycles = SystemCoreClock / 1000U; /* 1 ms in cycles */
+    const uint32_t period_cycles_local = period_cycles; /* precomputed: 1 ms in cycles */
 
     if (TIM6->SR & TIM_SR_UIF)
     {
-        uint32_t now_cycles = DWT->CYCCNT;
+        uint32_t now_cycles = FM_BOARD_DWT_GetCycles();
 
         if (!has_reference)
         {
@@ -142,10 +152,10 @@ void TIM6_IRQHandler(void)
         int32_t interval_cycles = (int32_t)(now_cycles - prev_tick_cycles);
         prev_tick_cycles = now_cycles; /* store for next tick */
 
-        int32_t err_cycles = interval_cycles - (int32_t)period_cycles; /* current-interval error */
+        int32_t err_cycles = interval_cycles - (int32_t)period_cycles_local; /* current-interval error */
 
-        if ((err_cycles >= (int32_t)CPU_CYCLES_PER_US)
-            || (err_cycles <= -(int32_t)CPU_CYCLES_PER_US))
+        if ((err_cycles >= (int32_t)cycles_per_us)
+            || (err_cycles <= -(int32_t)cycles_per_us))
         {
             FM_DEBUG_LedError(FM_DEBUG_LED_ON);
             FM_DEBUG_ReportError(FM_DEBUG_ERR_JITTER);
@@ -172,7 +182,7 @@ void TIM7_IRQHandler(void)
 
     if (TIM7->SR & TIM_SR_UIF)
     {
-        t_start_cycles = DWT->CYCCNT;
+        t_start_cycles = FM_BOARD_DWT_GetCycles();
 
         /* Controlled workload: adjust loop length to tune injected load. */
         for (volatile uint32_t i = 0; i < 90U; i++)
@@ -180,7 +190,7 @@ void TIM7_IRQHandler(void)
             __NOP();
         }
 
-        t_end_cycles = DWT->CYCCNT;
+        t_end_cycles = FM_BOARD_DWT_GetCycles();
         t_interval_cycles = t_start_cycles - t_prev_cycles;
         t_prev_cycles = t_start_cycles;
         dur_cycles = t_end_cycles - t_start_cycles;

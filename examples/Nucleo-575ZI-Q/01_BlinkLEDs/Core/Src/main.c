@@ -100,7 +100,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      FM_MAIN_Main();
+	  FM_MAIN_Main();
 
     /* USER CODE END WHILE */
 

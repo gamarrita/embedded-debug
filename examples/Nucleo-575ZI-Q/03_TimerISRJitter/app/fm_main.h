@@ -1,63 +1,39 @@
-/**
+/*
  * @file    fm_main.h
- * @brief   Flowmeet application entry point (APP layer).
+ * @brief   Punto de entrada de la aplicación Flowmeet (capa APP).
+ * @date    2025-09-14
+ * @author  Flowmeet
  *
  * @details
- *  - Exposes ONLY the public API of this module.
- *  - No HAL details or Flash addresses shall be included here.
- *  - Include this header in the IDE-generated main.c and call FM_MAIN_Main().
+ *   - Este header expone SOLO la API pública del módulo.
+ *   - No incluir detalles de HAL ni direcciones de Flash aquí.
+ *   - Incluir este header en main.c generado por el IDE y llamar FM_MAIN_Main().
+ *
+ *   (Basado en tu plantilla actual y comentarios de integración con el IDE.)
  */
 
 #ifndef FM_MAIN_H_
 #define FM_MAIN_H_
 
 /* =========================== Includes ==================================== */
-
 #include <stdint.h>
-#include <stdbool.h>
-
-/* Optional public dependencies */
-/* #include "fmx.h"     *//* If main requires public RTOS types */
-/* #include "fm_log.h"  *//* If main calls logging modules       */
-
-/* =========================== Public Macros ================================ */
-
-/* Unit-suffixed configuration constants */
-
-#define FM_MAIN_LOOP_PERIOD_MS        (10U)    /* Main loop period (ms) */
-#define FM_MAIN_WATCHDOG_TIMEOUT_SEC  (2U)     /* Watchdog timeout (s)  */
-#define FM_MAIN_STACK_SIZE_BYTES      (2048U)  /* Thread stack size     */
-
-/* =========================== Public Types ================================= */
-
-/**
- * @brief Module status codes.
- */
-typedef enum {
-    FM_MAIN_OK = 0, FM_MAIN_ERROR
-} fm_main_status_t;
 
 /* =========================== Public API =================================== */
-
 /**
- * @brief Initializes the application.
- *
- * This function initializes drivers, modules, and RTOS (if applicable).
+ * @brief  Inicializa la aplicación (drivers, módulos, RTOS si aplica).
  */
 void FM_MAIN_Init(void);
 
 /**
- * @brief Application main loop.
- *
- * Used when no scheduler/RTOS is present.
- * If ThreadX or another RTOS is used, this function may remain minimal
- * and delegate control to application threads.
+ * @brief  Bucle principal de la app (si no usás scheduler/RTOS).
+ * @note   Si usás ThreadX, este loop puede quedar mínimo y ceder control a hilos.
  */
 void FM_MAIN_Main(void);
 
-void FM_TIM7_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
-
-
+/**
+ * @brief  Callback invoked by board layer on RTC WakeUp event.
+ */
+void FM_MAIN_OnRtcWakeup(void);
 
 #endif /* FM_MAIN_H_ */
 

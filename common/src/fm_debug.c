@@ -55,12 +55,6 @@ void FM_DEBUG_Init(void)
 
 	FM_DEBUG_RefreshJumpers();
 
-#if defined(DWT) && defined(CoreDebug) && \
-    defined(DWT_CTRL_CYCCNTENA_Msk) && defined(CoreDebug_DEMCR_TRCENA_Msk)
-	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk; /* enable trace */
-	DWT->CYCCNT = 0;
-	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk; /* enable cycle counter */
-#endif
 }
 
 /**

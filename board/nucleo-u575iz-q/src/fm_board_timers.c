@@ -1,5 +1,5 @@
 #include "fm_board_timers.h"
-
+#include "fm_debug.h"
 #include "fm_main.h"
 #include "rtc.h"
 
@@ -14,9 +14,19 @@ void FM_BOARD_TIMERS_DelayMs(uint32_t delay_ms)
     HAL_Delay(delay_ms);
 }
 
+void OnRtcWakeup(void)
+{
+	char msg[] = "Wake Up Timer callback\n";
+
+	FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
+}
+
+
 /* HAL Callbacks ------------------------------------------------------------ */
 void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
 {
     UNUSED(hrtc);
-    FM_MAIN_OnRtcWakeup();
+    OnRtcWakeup();
 }
+
+
