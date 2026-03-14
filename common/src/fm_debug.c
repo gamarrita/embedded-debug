@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "main.h"
 #include "fm_board_gpio.h"
 #include "fm_board_uart.h"
 #include "fm_debug.h"
@@ -54,9 +55,12 @@ void FM_DEBUG_Init(void)
 
 	FM_DEBUG_RefreshJumpers();
 
+#if defined(DWT) && defined(CoreDebug) && \
+    defined(DWT_CTRL_CYCCNTENA_Msk) && defined(CoreDebug_DEMCR_TRCENA_Msk)
 	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk; /* enable trace */
 	DWT->CYCCNT = 0;
 	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk; /* enable cycle counter */
+#endif
 }
 
 /**

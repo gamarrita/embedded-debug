@@ -12,10 +12,11 @@
 
 
 /* ===========================     Includes    ============================== */
-#include "main.h"
 #include "fm_main.h"
 #include "fm_debug.h"
-
+#include "fm_board_gpio.h"
+#include "fm_board_timers.h"
+#include "fm_board_uart.h"
 
 
 /* =========================== Private Defines ============================== */
@@ -37,7 +38,10 @@
 
 void FM_MAIN_Init(void)
 {
-
+	FM_BOARD_GPIO_Init();
+	FM_BOARD_TIMERS_Init();
+	FM_BOARD_UART_Init();
+	FM_DEBUG_Init();
 }
 
 /*
@@ -47,28 +51,26 @@ void FM_MAIN_Init(void)
  */
 void FM_MAIN_Main(void)
 {
-    FM_DEBUG_Init();
+	FM_MAIN_Init();
+
+	fm_debug_led_state_t led_toogle = FM_DEBUG_LED_OFF;
 
     for (;;)
     {
-        HAL_GPIO_TogglePin(LED1_GPIO_PORT, LED1_PIN);
-        HAL_Delay(50);
+    	led_toogle ^= 1; /* toggle LED state */
+        FM_DEBUG_LedError(led_toogle);
+        FM_BOARD_TIMERS_DelayMs(250U);
     }
 }
 
 /* =========================== Interrupts =================================== */
 
-/**
- * @brief  Wake Up Timer callback.
- * @param  hrtc RTC handle
- * @retval None
- */
-void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
-{
-    /* Prevent unused argument(s) compilation warning */
-    UNUSED(hrtc);
-    FM_DEBUG_UART_MSG("Wake Up Timer callback\n");
-}
 
+void FM_MAIN_OnRtcWakeup(void)
+{
+	char msg[] = "Wake Up Timer callback\n";
+
+	FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
+}
 
 /*** end of file ***/
