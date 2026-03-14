@@ -12,12 +12,14 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "main.h"
+#include "fm_board.h"
 #include "fm_debug.h"
+#include "usart.h"
 
 /* Private Defines */
-#define FM_DEBUG_MSG_BUFFER_LENGTH   (32U)
-#define FM_DEBUG_UART_TIMEOUT_MS     (10U)
+#define TX_BUFFER_LENGTH	(1024U)
+#define MSG_BUFFER_LENGTH	(32U)
+#define UART_TIMEOUT_MS		(10U)
 
 /* Private Types */
 /* (none) */
@@ -28,10 +30,11 @@ extern UART_HandleTypeDef huart1;
 
 static volatile bool fm_debug_msg_enable = false;
 static volatile bool fm_debug_leds_enable = false;
-static char msg_buffer[FM_DEBUG_MSG_BUFFER_LENGTH];
+static char msg_buffer[MSG_BUFFER_LENGTH];
 
 /* Error tracking */
-static volatile uint32_t fm_debug_error_counts[FM_DEBUG_ERR_COUNT] = { 0U };
+static volatile uint32_t fm_debug_error_counts[FM_DEBUG_ERR_COUNT] =
+{ 0U };
 static volatile uint32_t fm_debug_error_mask = 0U;
 static volatile fm_debug_error_t fm_debug_last_error = FM_DEBUG_ERR_NONE;
 
@@ -49,11 +52,13 @@ static volatile fm_debug_error_t fm_debug_last_error = FM_DEBUG_ERR_NONE;
  */
 void FM_DEBUG_Init(void)
 {
-    FM_DEBUG_RefreshJumpers();
+	FM_BOARD_Init();
 
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;   /* enable trace */
-    DWT->CYCCNT = 0;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;              /* enable cycle counter */
+	FM_DEBUG_RefreshJumpers();
+
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk; /* enable trace */
+	DWT->CYCCNT = 0;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk; /* enable cycle counter */
 }
 
 /**
@@ -63,31 +68,8 @@ void FM_DEBUG_Init(void)
  */
 void FM_DEBUG_RefreshJumpers(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct = { 0 };
-
-    /* Enable pull-up only while sampling to avoid static current. */
-    GPIO_InitStruct.Pin = DBG_MSG_EN_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(DBG_MSG_EN_GPIO_Port, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = DBG_LED_EN_Pin;
-    HAL_GPIO_Init(DBG_LED_EN_GPIO_Port, &GPIO_InitStruct);
-
-    fm_debug_msg_enable = (HAL_GPIO_ReadPin(DBG_MSG_EN_GPIO_Port,
-            DBG_MSG_EN_Pin) == GPIO_PIN_SET);
-    fm_debug_leds_enable = (HAL_GPIO_ReadPin(DBG_LED_EN_GPIO_Port,
-            DBG_LED_EN_Pin) == GPIO_PIN_SET);
-
-    /* Return both pins to lowest-power state. */
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-
-    GPIO_InitStruct.Pin = DBG_MSG_EN_Pin;
-    HAL_GPIO_Init(DBG_MSG_EN_GPIO_Port, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = DBG_LED_EN_Pin;
-    HAL_GPIO_Init(DBG_LED_EN_GPIO_Port, &GPIO_InitStruct);
+	fm_debug_msg_enable = FM_BOARD_IsDbgMsgEnabled();
+	fm_debug_leds_enable = FM_BOARD_IsDbgLedEnabled();
 }
 
 /**
@@ -95,7 +77,7 @@ void FM_DEBUG_RefreshJumpers(void)
  */
 bool FM_DEBUG_MsgIsEnabled(void)
 {
-    return fm_debug_msg_enable;
+	return fm_debug_msg_enable;
 }
 
 /**
@@ -103,7 +85,7 @@ bool FM_DEBUG_MsgIsEnabled(void)
  */
 bool FM_DEBUG_LedsAreEnabled(void)
 {
-    return fm_debug_leds_enable;
+	return fm_debug_leds_enable;
 }
 
 /**
@@ -113,16 +95,16 @@ bool FM_DEBUG_LedsAreEnabled(void)
  */
 void FM_DEBUG_ReportError(fm_debug_error_t err)
 {
-    if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
-    {
-        return;
-    }
+	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+	{
+		return;
+	}
 
-    fm_debug_error_counts[err]++;
-    fm_debug_last_error = err;
-    fm_debug_error_mask |= (1UL << (uint32_t)err);
+	fm_debug_error_counts[err]++;
+	fm_debug_last_error = err;
+	fm_debug_error_mask |= (1UL << (uint32_t) err);
 
-    FM_DEBUG_LedError(FM_DEBUG_LED_ON);
+	FM_DEBUG_LedError(FM_DEBUG_LED_ON);
 }
 
 /**
@@ -130,12 +112,12 @@ void FM_DEBUG_ReportError(fm_debug_error_t err)
  */
 uint32_t FM_DEBUG_ErrorCount(fm_debug_error_t err)
 {
-    if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
-    {
-        return 0U;
-    }
+	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+	{
+		return 0U;
+	}
 
-    return fm_debug_error_counts[err];
+	return fm_debug_error_counts[err];
 }
 
 /**
@@ -143,7 +125,7 @@ uint32_t FM_DEBUG_ErrorCount(fm_debug_error_t err)
  */
 fm_debug_error_t FM_DEBUG_LastError(void)
 {
-    return fm_debug_last_error;
+	return fm_debug_last_error;
 }
 
 /**
@@ -151,7 +133,7 @@ fm_debug_error_t FM_DEBUG_LastError(void)
  */
 uint32_t FM_DEBUG_ErrorMask(void)
 {
-    return fm_debug_error_mask;
+	return fm_debug_error_mask;
 }
 
 /**
@@ -159,17 +141,17 @@ uint32_t FM_DEBUG_ErrorMask(void)
  */
 void FM_DEBUG_ClearErrors(void)
 {
-    uint32_t i;
+	uint32_t i;
 
-    for (i = 0U; i < (uint32_t)FM_DEBUG_ERR_COUNT; i++)
-    {
-        fm_debug_error_counts[i] = 0U;
-    }
+	for (i = 0U; i < (uint32_t) FM_DEBUG_ERR_COUNT; i++)
+	{
+		fm_debug_error_counts[i] = 0U;
+	}
 
-    fm_debug_error_mask = 0U;
-    fm_debug_last_error = FM_DEBUG_ERR_NONE;
+	fm_debug_error_mask = 0U;
+	fm_debug_last_error = FM_DEBUG_ERR_NONE;
 
-    HAL_GPIO_WritePin(LED_ERROR_GPIO_Port, LED_ERROR_Pin, GPIO_PIN_RESET);
+	FM_BOARD_LedErrorOff();
 }
 
 /**
@@ -179,14 +161,14 @@ void FM_DEBUG_ClearErrors(void)
  */
 void FM_DEBUG_LedError(fm_debug_led_state_t state)
 {
-    if (state == FM_DEBUG_LED_ON)
-    {
-        HAL_GPIO_WritePin(LED_ERROR_GPIO_Port, LED_ERROR_Pin, GPIO_PIN_SET);
-    }
-    else
-    {
-        HAL_GPIO_WritePin(LED_ERROR_GPIO_Port, LED_ERROR_Pin, GPIO_PIN_RESET);
-    }
+	if (state == FM_DEBUG_LED_ON)
+	{
+		FM_BOARD_LedErrorOn();
+	}
+	else
+	{
+		FM_BOARD_LedErrorOff();
+	}
 }
 
 /**
@@ -197,14 +179,14 @@ void FM_DEBUG_LedError(fm_debug_led_state_t state)
 void FM_DEBUG_LedRun(fm_debug_led_state_t state)
 {
 
-    if (state == FM_DEBUG_LED_ON)
-    {
-        HAL_GPIO_WritePin(LED_RUN_GPIO_Port, LED_RUN_Pin, GPIO_PIN_SET);
-    }
-    else
-    {
-        HAL_GPIO_WritePin(LED_RUN_GPIO_Port, LED_RUN_Pin, GPIO_PIN_RESET);
-    }
+	if (state == FM_DEBUG_LED_ON)
+	{
+		FM_BOARD_LedRunOn();
+	}
+	else
+	{
+		FM_BOARD_LedRunOff();
+	}
 }
 
 /**
@@ -214,14 +196,14 @@ void FM_DEBUG_LedRun(fm_debug_led_state_t state)
  */
 void FM_DEBUG_LedSignal(fm_debug_led_state_t state)
 {
-    if (state == FM_DEBUG_LED_ON)
-    {
-        HAL_GPIO_WritePin(LED_SIGNAL_GPIO_Port, LED_SIGNAL_Pin, GPIO_PIN_SET);
-    }
-    else
-    {
-        HAL_GPIO_WritePin(LED_SIGNAL_GPIO_Port, LED_SIGNAL_Pin, GPIO_PIN_RESET);
-    }
+	if (state == FM_DEBUG_LED_ON)
+	{
+		FM_BOARD_LedSignalOn();
+	}
+	else
+	{
+		FM_BOARD_LedSignalOff();
+	}
 }
 
 /**
@@ -232,20 +214,20 @@ void FM_DEBUG_LedSignal(fm_debug_led_state_t state)
 bool FM_DEBUG_UartMsg(const char *p_msg, uint32_t len)
 {
 
-    if ((p_msg == NULL) || (len == 0U) || (!fm_debug_msg_enable))
-    {
-        return false; /* Invalid parameters */
-    }
+	if ((p_msg == NULL) || (len == 0U) || (!fm_debug_msg_enable))
+	{
+		return false; /* Invalid parameters */
+	}
 
-    if (len >= FM_DEBUG_MSG_BUFFER_LENGTH)
-    {
-        /* Truncate message if it exceeds buffer length (should not happen in normal use) */
-        len = FM_DEBUG_MSG_BUFFER_LENGTH;
-    }
+	if (len >= MSG_BUFFER_LENGTH)
+	{
+		/* Truncate message if it exceeds buffer length (should not happen in normal use) */
+		len = MSG_BUFFER_LENGTH;
+	}
 
-    HAL_UART_Transmit(&huart1, (const uint8_t *)p_msg, len, FM_DEBUG_UART_TIMEOUT_MS);
+	HAL_UART_Transmit(&huart1, (const uint8_t*) p_msg, len, UART_TIMEOUT_MS);
 
-    return true;
+	return true;
 }
 
 /**
@@ -255,19 +237,19 @@ bool FM_DEBUG_UartMsg(const char *p_msg, uint32_t len)
  */
 bool FM_DEBUG_UartUint32(uint32_t num)
 {
-    int len;
-    bool ret;
+	int len;
+	bool ret;
 
-    if (!fm_debug_msg_enable)
-    {
-        return false; /* Debug messages disabled by jumper */
-    }
+	if (!fm_debug_msg_enable)
+	{
+		return false; /* Debug messages disabled by jumper */
+	}
 
-    len = snprintf(msg_buffer, FM_DEBUG_MSG_BUFFER_LENGTH, "%lu\n", (unsigned long)num);
+	len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%lu\n", (unsigned long) num);
 
-    ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t)len);
+	ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
 
-    return ret;
+	return ret;
 
 }
 
@@ -278,19 +260,19 @@ bool FM_DEBUG_UartUint32(uint32_t num)
  */
 bool FM_DEBUG_UartInt32(int32_t num)
 {
-    int len;
-    bool ret;
+	int len;
+	bool ret;
 
-    if (!fm_debug_msg_enable)
-    {
-        return false; /* Debug messages disabled by jumper */
-    }
+	if (!fm_debug_msg_enable)
+	{
+		return false; /* Debug messages disabled by jumper */
+	}
 
-    len = snprintf(msg_buffer, FM_DEBUG_MSG_BUFFER_LENGTH, "%ld\n", (long)num);
+	len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%ld\n", (long) num);
 
-    ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t)len);
+	ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
 
-    return ret;
+	return ret;
 
 }
 
@@ -301,19 +283,19 @@ bool FM_DEBUG_UartInt32(int32_t num)
  */
 bool FM_DEBUG_UartFloat(float num)
 {
-    int len;
-    bool ret;
+	int len;
+	bool ret;
 
-    if (!fm_debug_msg_enable)
-    {
-        return false; /* Debug messages disabled by jumper */
-    }
+	if (!fm_debug_msg_enable)
+	{
+		return false; /* Debug messages disabled by jumper */
+	}
 
-    len = snprintf(msg_buffer, FM_DEBUG_MSG_BUFFER_LENGTH, "%0.2f\n", (double)num);
+	len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%0.2f\n", (double) num);
 
-    ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t)len);
+	ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
 
-    return ret;
+	return ret;
 
 }
 
