@@ -1,29 +1,13 @@
-/**
- * @file    fm_board.c
- * @brief   Board adaptation layer for NUCLEO-U575ZI-Q.
- *
- * @details
- *  - Owns hardware init (GPIO for LEDs/jumpers).
- *  - Provides delay and jumper read helpers.
- *  - Receives HAL callbacks and forwards to app.
- */
+#include "fm_board_gpio.h"
 
-#include "fm_board.h"
-
-#include "fm_main.h"
 #include "main.h"
 
-/* Private Defines */
-#define LED_INIT_SPEED      GPIO_SPEED_FREQ_LOW
-#define LED_INIT_MODE       GPIO_MODE_OUTPUT_PP
-#define LED_INIT_PULL       GPIO_NOPULL
-
 /* Private Prototypes */
-static void fm_board_enable_gpio_clock(GPIO_TypeDef *port);
-static bool fm_board_read_jumper(GPIO_TypeDef *port, uint16_t pin);
+static void fm_board_gpio_enable_clock(GPIO_TypeDef *port);
+static bool fm_board_gpio_read_jumper(GPIO_TypeDef *port, uint16_t pin);
 
 /* Private Bodies */
-static void fm_board_enable_gpio_clock(GPIO_TypeDef *port)
+static void fm_board_gpio_enable_clock(GPIO_TypeDef *port)
 {
     if (port == GPIOA)
     {
@@ -59,12 +43,12 @@ static void fm_board_enable_gpio_clock(GPIO_TypeDef *port)
     }
 }
 
-static bool fm_board_read_jumper(GPIO_TypeDef *port, uint16_t pin)
+static bool fm_board_gpio_read_jumper(GPIO_TypeDef *port, uint16_t pin)
 {
     GPIO_InitTypeDef GPIO_InitStruct = { 0 };
     bool enabled;
 
-    fm_board_enable_gpio_clock(port);
+    fm_board_gpio_enable_clock(port);
 
     GPIO_InitStruct.Pin = pin;
     GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
@@ -82,19 +66,19 @@ static bool fm_board_read_jumper(GPIO_TypeDef *port, uint16_t pin)
 }
 
 /* Public Bodies */
-void FM_BOARD_Init(void)
+void FM_BOARD_GPIO_Init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 
-    fm_board_enable_gpio_clock(LED_ERROR_GPIO_Port);
-    fm_board_enable_gpio_clock(LED_RUN_GPIO_Port);
-    fm_board_enable_gpio_clock(LED_SIGNAL_GPIO_Port);
-    fm_board_enable_gpio_clock(DBG_MSG_EN_GPIO_Port);
-    fm_board_enable_gpio_clock(DBG_LED_EN_GPIO_Port);
+    fm_board_gpio_enable_clock(LED_ERROR_GPIO_Port);
+    fm_board_gpio_enable_clock(LED_RUN_GPIO_Port);
+    fm_board_gpio_enable_clock(LED_SIGNAL_GPIO_Port);
+    fm_board_gpio_enable_clock(DBG_MSG_EN_GPIO_Port);
+    fm_board_gpio_enable_clock(DBG_LED_EN_GPIO_Port);
 
-    GPIO_InitStruct.Mode = LED_INIT_MODE;
-    GPIO_InitStruct.Pull = LED_INIT_PULL;
-    GPIO_InitStruct.Speed = LED_INIT_SPEED;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 
     GPIO_InitStruct.Pin = LED_ERROR_Pin;
     HAL_GPIO_Init(LED_ERROR_GPIO_Port, &GPIO_InitStruct);
@@ -108,67 +92,52 @@ void FM_BOARD_Init(void)
     HAL_GPIO_Init(LED_SIGNAL_GPIO_Port, &GPIO_InitStruct);
     HAL_GPIO_WritePin(LED_SIGNAL_GPIO_Port, LED_SIGNAL_Pin, GPIO_PIN_RESET);
 
+    /* Leave jumpers in lowest-power state when not sampling. */
     GPIO_InitStruct.Pin = DBG_MSG_EN_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(DBG_MSG_EN_GPIO_Port, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = DBG_LED_EN_Pin;
     HAL_GPIO_Init(DBG_LED_EN_GPIO_Port, &GPIO_InitStruct);
 }
 
-void FM_BOARD_DelayMs(uint32_t delay_ms)
+bool FM_BOARD_GPIO_IsDbgLedEnabled(void)
 {
-    HAL_Delay(delay_ms);
+    return fm_board_gpio_read_jumper(DBG_LED_EN_GPIO_Port, DBG_LED_EN_Pin);
 }
 
-bool FM_BOARD_IsDbgLedEnabled(void)
+bool FM_BOARD_GPIO_IsDbgMsgEnabled(void)
 {
-    return fm_board_read_jumper(DBG_LED_EN_GPIO_Port, DBG_LED_EN_Pin);
+    return fm_board_gpio_read_jumper(DBG_MSG_EN_GPIO_Port, DBG_MSG_EN_Pin);
 }
 
-bool FM_BOARD_IsDbgMsgEnabled(void)
-{
-    return fm_board_read_jumper(DBG_MSG_EN_GPIO_Port, DBG_MSG_EN_Pin);
-}
-
-void FM_BOARD_LedErrorOn(void)
+void FM_BOARD_GPIO_LedErrorOn(void)
 {
     HAL_GPIO_WritePin(LED_ERROR_GPIO_Port, LED_ERROR_Pin, GPIO_PIN_SET);
 }
 
-void FM_BOARD_LedErrorOff(void)
+void FM_BOARD_GPIO_LedErrorOff(void)
 {
     HAL_GPIO_WritePin(LED_ERROR_GPIO_Port, LED_ERROR_Pin, GPIO_PIN_RESET);
 }
 
-void FM_BOARD_LedRunOn(void)
+void FM_BOARD_GPIO_LedRunOn(void)
 {
     HAL_GPIO_WritePin(LED_RUN_GPIO_Port, LED_RUN_Pin, GPIO_PIN_SET);
 }
 
-void FM_BOARD_LedRunOff(void)
+void FM_BOARD_GPIO_LedRunOff(void)
 {
     HAL_GPIO_WritePin(LED_RUN_GPIO_Port, LED_RUN_Pin, GPIO_PIN_RESET);
 }
 
-void FM_BOARD_LedSignalOn(void)
+void FM_BOARD_GPIO_LedSignalOn(void)
 {
     HAL_GPIO_WritePin(LED_SIGNAL_GPIO_Port, LED_SIGNAL_Pin, GPIO_PIN_SET);
 }
 
-void FM_BOARD_LedSignalOff(void)
+void FM_BOARD_GPIO_LedSignalOff(void)
 {
     HAL_GPIO_WritePin(LED_SIGNAL_GPIO_Port, LED_SIGNAL_Pin, GPIO_PIN_RESET);
 }
-
-/* HAL Callbacks ------------------------------------------------------------ */
-void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
-{
-    UNUSED(hrtc);
-    FM_MAIN_OnRtcWakeup();
-}
-
-/* Interrupts */
-/* (none) */

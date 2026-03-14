@@ -12,9 +12,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "fm_board.h"
+#include "fm_board_gpio.h"
+#include "fm_board_uart.h"
 #include "fm_debug.h"
-#include "usart.h"
 
 /* Private Defines */
 #define TX_BUFFER_LENGTH	(1024U)
@@ -25,8 +25,6 @@
 /* (none) */
 
 /* Private Data */
-
-extern UART_HandleTypeDef huart1;
 
 static volatile bool fm_debug_msg_enable = false;
 static volatile bool fm_debug_leds_enable = false;
@@ -52,7 +50,7 @@ static volatile fm_debug_error_t fm_debug_last_error = FM_DEBUG_ERR_NONE;
  */
 void FM_DEBUG_Init(void)
 {
-	FM_BOARD_Init();
+	FM_BOARD_GPIO_Init();
 
 	FM_DEBUG_RefreshJumpers();
 
@@ -68,8 +66,8 @@ void FM_DEBUG_Init(void)
  */
 void FM_DEBUG_RefreshJumpers(void)
 {
-	fm_debug_msg_enable = FM_BOARD_IsDbgMsgEnabled();
-	fm_debug_leds_enable = FM_BOARD_IsDbgLedEnabled();
+	fm_debug_msg_enable = FM_BOARD_GPIO_IsDbgMsgEnabled();
+	fm_debug_leds_enable = FM_BOARD_GPIO_IsDbgLedEnabled();
 }
 
 /**
@@ -151,7 +149,7 @@ void FM_DEBUG_ClearErrors(void)
 	fm_debug_error_mask = 0U;
 	fm_debug_last_error = FM_DEBUG_ERR_NONE;
 
-	FM_BOARD_LedErrorOff();
+	FM_BOARD_GPIO_LedErrorOff();
 }
 
 /**
@@ -163,11 +161,11 @@ void FM_DEBUG_LedError(fm_debug_led_state_t state)
 {
 	if (state == FM_DEBUG_LED_ON)
 	{
-		FM_BOARD_LedErrorOn();
+		FM_BOARD_GPIO_LedErrorOn();
 	}
 	else
 	{
-		FM_BOARD_LedErrorOff();
+		FM_BOARD_GPIO_LedErrorOff();
 	}
 }
 
@@ -181,11 +179,11 @@ void FM_DEBUG_LedRun(fm_debug_led_state_t state)
 
 	if (state == FM_DEBUG_LED_ON)
 	{
-		FM_BOARD_LedRunOn();
+		FM_BOARD_GPIO_LedRunOn();
 	}
 	else
 	{
-		FM_BOARD_LedRunOff();
+		FM_BOARD_GPIO_LedRunOff();
 	}
 }
 
@@ -198,11 +196,11 @@ void FM_DEBUG_LedSignal(fm_debug_led_state_t state)
 {
 	if (state == FM_DEBUG_LED_ON)
 	{
-		FM_BOARD_LedSignalOn();
+		FM_BOARD_GPIO_LedSignalOn();
 	}
 	else
 	{
-		FM_BOARD_LedSignalOff();
+		FM_BOARD_GPIO_LedSignalOff();
 	}
 }
 
@@ -225,7 +223,7 @@ bool FM_DEBUG_UartMsg(const char *p_msg, uint32_t len)
 		len = MSG_BUFFER_LENGTH;
 	}
 
-	HAL_UART_Transmit(&huart1, (const uint8_t*) p_msg, len, UART_TIMEOUT_MS);
+	(void) FM_BOARD_UART_Transmit((const uint8_t*) p_msg, len, UART_TIMEOUT_MS);
 
 	return true;
 }

@@ -14,7 +14,9 @@
 /* ===========================     Includes    ============================== */
 #include "fm_main.h"
 #include "fm_debug.h"
-#include "fm_board.h"
+#include "fm_board_gpio.h"
+#include "fm_board_timers.h"
+#include "fm_board_uart.h"
 
 
 
@@ -37,7 +39,9 @@
 
 void FM_MAIN_Init(void)
 {
-	FM_BOARD_Init();
+	FM_BOARD_GPIO_Init();
+	FM_BOARD_TIMERS_Init();
+	FM_BOARD_UART_Init();
 	FM_DEBUG_Init();
 }
 
@@ -57,7 +61,7 @@ void FM_MAIN_Main(void)
     {
     	led_toogle ^= 1; /* toggle LED state */
         FM_DEBUG_LedError(led_toogle);
-        FM_BOARD_DelayMs(250U);
+        FM_BOARD_TIMERS_DelayMs(250U);
     }
 }
 
