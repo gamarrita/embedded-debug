@@ -16,6 +16,10 @@
 #include "main.h"
 #include "fm_main.h"
 #include "fm_debug.h"
+#include "fm_board_gpio.h"
+#include "fm_board_timers.h"
+#include "fm_board_uart.h"
+#include "fm_board.h"
 
 /* =========================== Private Defines ============================== */
 
@@ -42,6 +46,7 @@ void FM_MAIN_Init(void)
 {
     /* Application-level initialization.
      Keep this module as the owner of the main control flow. */
+	FM_BOARD_Init();
 }
 
 
@@ -53,16 +58,17 @@ void FM_MAIN_Init(void)
 void FM_MAIN_Main(void)
 {
 
-    FM_DEBUG_UART_MSG("Entry: FM_MAIN_Main\n");
-
-    FM_DEBUG_Init();
+	char p_msg[] = "MCU Run\n";
+	FM_MAIN_Init();
 
     for (;;)
     {
-        HAL_GPIO_WritePin(LED1_GPIO_PORT, LED1_PIN, GPIO_PIN_SET);
-        HAL_Delay(10);
-        HAL_GPIO_WritePin(LED1_GPIO_PORT, LED1_PIN, GPIO_PIN_RESET);
+    	FM_DEBUG_LedRun(FM_DEBUG_LED_ON);
+    	FM_DEBUG_UartMsg(p_msg, sizeof(p_msg) - 1);
+        FM_BOARD_TIMERS_DelayMs(100);
 
+
+        FM_DEBUG_LedRun(FM_DEBUG_LED_OFF);
         HAL_SuspendTick();
         HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
         HAL_ResumeTick();
@@ -80,9 +86,10 @@ void FM_MAIN_Main(void)
  */
 void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
 {
+	char p_msg[] = "RTC Wake Up\n";
     /* Prevent unused argument(s) compilation warning */
     UNUSED(hrtc);
-    FM_DEBUG_UART_MSG("Wake Up Timer callback\n");
+    FM_DEBUG_UartMsg(p_msg, sizeof(p_msg) - 1);
 }
 
 /*** end of file ***/

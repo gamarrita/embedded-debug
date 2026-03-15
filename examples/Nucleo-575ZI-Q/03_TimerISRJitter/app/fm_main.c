@@ -18,6 +18,7 @@
 #include "fm_board_gpio.h"
 #include "fm_board_timers.h"
 #include "fm_board_uart.h"
+#include "fm_board.h"
 #include "fm_board_dwt.h"
 #include "string.h"
 #include "stm32u5xx_ll_rcc.h"
@@ -30,7 +31,6 @@
 
 /* =========================== Private Data ================================= */
 TIM_HandleTypeDef htim6;
-TIM_HandleTypeDef htim7;
 static uint32_t cycles_per_us = 0U;
 static uint32_t period_cycles = 0U;
 
@@ -46,13 +46,11 @@ void FM_MAIN_Init(void)
 {
     /* Application-level initialization.
      * Keep this module as the owner of the main control flow. */
-	FM_BOARD_GPIO_Init();
-	FM_BOARD_TIMERS_Init();
-	FM_BOARD_UART_Init();
-	(void) FM_BOARD_DWT_Init();
+	FM_BOARD_Init();
+	FM_BOARD_DWT_Init();
+
 	cycles_per_us = FM_BOARD_DWT_CyclesPerUs();
 	period_cycles = FM_BOARD_DWT_GetCpuHz() / 1000U; /* 1 ms worth of cycles */
-	FM_DEBUG_Init();
 }
 
 /* Main execution loop.
@@ -68,7 +66,6 @@ void FM_MAIN_Main(void)
     FM_MAIN_Init();
 
 
-
     /*
      * TIM6: reference timer at 1 kHz used to measure interrupt jitter.
      * Deviation versus the ideal 1 ms period is computed in its ISR using DWT.
@@ -80,7 +77,7 @@ void FM_MAIN_Main(void)
 
     if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
     {
-        //Error_Handler();
+        Error_Handler();
     }
 
     HAL_TIM_Base_Start(&htim6);
@@ -89,26 +86,10 @@ void FM_MAIN_Main(void)
     __HAL_TIM_ENABLE_IT(&htim6, TIM_IT_UPDATE);
     HAL_NVIC_EnableIRQ(TIM6_IRQn);
 
-    /*
-     * TIM7: interfering workload timer (~100 Hz).
-     * Injects a bounded ISR load to induce measurable jitter on TIM6.
-     * Tune ARR/PSC or the NOP loop length in TIM7_IRQHandler to change hit rate.
-     */
-    __HAL_RCC_TIM7_CLK_ENABLE();
-    htim7.Instance = TIM7;
-    htim7.Init.Prescaler = 239;  /* 10 µs per tick */
-    htim7.Init.Period = 1000;     /* ~10 ms period (100 Hz) */
-
-    if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
-    {
-      //  Error_Handler();
-    }
-
-    HAL_TIM_Base_Start(&htim7);
-
-    HAL_NVIC_SetPriority(TIM7_IRQn, 6, 0);
-    __HAL_TIM_ENABLE_IT(&htim7, TIM_IT_UPDATE);
-    HAL_NVIC_EnableIRQ(TIM7_IRQn);
+    /* Inicializa y configura el generador de carga del depurador (TIM7) */
+    FM_DEBUG_LoadGenInit();
+    FM_DEBUG_LoadGenConfigure(10000U, 90U, 6U);
+    FM_DEBUG_LoadGenStart();
 
     FM_DEBUG_UartMsg(msg, strlen(msg));
 
@@ -157,58 +138,11 @@ void TIM6_IRQHandler(void)
         if ((err_cycles >= (int32_t)cycles_per_us)
             || (err_cycles <= -(int32_t)cycles_per_us))
         {
-            FM_DEBUG_LedError(FM_DEBUG_LED_ON);
             FM_DEBUG_ReportError(FM_DEBUG_ERR_JITTER);
         }
 
         TIM6->SR &= ~TIM_SR_UIF;
     }
-}
-
-/*
- * TIM7 workload ISR — injects controlled latency to create measurable jitter.
- * - Uses DWT to timestamp entry/exit for quick inspection via debugger.
- * - Workload is a short NOP loop; adjust its length or TIM7 frequency to tune jitter rate.
- */
-void TIM7_IRQHandler(void)
-{
-    static volatile uint32_t t_start_cycles = 0;
-    static volatile uint32_t t_end_cycles = 0;
-    static volatile uint32_t t_prev_cycles = 0;
-    static volatile uint32_t t_min_cycles = 0xFFFFFFFFU;
-    static volatile uint32_t t_max_cycles = 0;
-    static volatile uint32_t t_interval_cycles = 0; /* cycles between consecutive TIM7 IRQs */
-    static volatile uint32_t dur_cycles = 0;
-
-    if (TIM7->SR & TIM_SR_UIF)
-    {
-        t_start_cycles = FM_BOARD_DWT_GetCycles();
-
-        /* Controlled workload: adjust loop length to tune injected load. */
-        for (volatile uint32_t i = 0; i < 90U; i++)
-        {
-            __NOP();
-        }
-
-        t_end_cycles = FM_BOARD_DWT_GetCycles();
-        t_interval_cycles = t_start_cycles - t_prev_cycles;
-        t_prev_cycles = t_start_cycles;
-        dur_cycles = t_end_cycles - t_start_cycles;
-
-        (void)t_interval_cycles; /* used for live debug inspection */
-
-        if (dur_cycles < t_min_cycles)
-        {
-            t_min_cycles = dur_cycles;
-        }
-        if (dur_cycles > t_max_cycles)
-        {
-            t_max_cycles = dur_cycles;
-        }
-
-        TIM7->SR &= ~TIM_SR_UIF;
-    }
-
 }
 
 /*** end of file ***/

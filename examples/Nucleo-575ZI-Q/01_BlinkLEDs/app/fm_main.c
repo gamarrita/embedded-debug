@@ -17,6 +17,7 @@
 #include "fm_board_gpio.h"
 #include "fm_board_timers.h"
 #include "fm_board_uart.h"
+#include "fm_board.h"
 
 
 /* =========================== Private Defines ============================== */
@@ -38,10 +39,7 @@
 
 void FM_MAIN_Init(void)
 {
-	FM_BOARD_GPIO_Init();
-	FM_BOARD_TIMERS_Init();
-	FM_BOARD_UART_Init();
-	FM_DEBUG_Init();
+	FM_BOARD_Init();
 }
 
 /*
@@ -51,7 +49,10 @@ void FM_MAIN_Init(void)
  */
 void FM_MAIN_Main(void)
 {
+	char msg[] = "Debugging!!!\n";
 	FM_MAIN_Init();
+
+
 
 	fm_debug_led_state_t led_toogle = FM_DEBUG_LED_OFF;
 
@@ -59,11 +60,20 @@ void FM_MAIN_Main(void)
     {
     	led_toogle ^= 1; /* toggle LED state */
         FM_DEBUG_LedError(led_toogle);
+        FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
         FM_BOARD_TIMERS_DelayMs(250U);
     }
 }
 
 /* =========================== Interrupts =================================== */
+
+/*
+void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
+{
+    UNUSED(hrtc);
+}
+*/
+
 
 
 
