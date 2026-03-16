@@ -20,10 +20,13 @@
 #include "fm_board_uart.h"
 #include "fm_board.h"
 #include "fm_board_dwt.h"
+#include "fm_board_clk.h"
+#include "jitter_meter.h"
 #include "string.h"
 #include "stm32u5xx_ll_rcc.h"
 
 /* =========================== Private Defines ============================== */
+#define JITTER_THRESHOLD_US   (1U)
 
 /* Module configuration */
 /* =========================== Private Types ================================ */
@@ -31,8 +34,7 @@
 
 /* =========================== Private Data ================================= */
 TIM_HandleTypeDef htim6;
-static uint32_t cycles_per_us = 0U;
-static uint32_t period_cycles = 0U;
+static FM_JitterMeter_t tim6_jitter_ctx;
 
 /* =========================== Private Prototypes =========================== */
 /* (none) */
@@ -48,9 +50,7 @@ void FM_MAIN_Init(void)
      * Keep this module as the owner of the main control flow. */
 	FM_BOARD_Init();
 	FM_BOARD_DWT_Init();
-
-	cycles_per_us = FM_BOARD_DWT_CyclesPerUs();
-	period_cycles = FM_BOARD_DWT_GetCpuHz() / 1000U; /* 1 ms worth of cycles */
+	FM_JitterMeter_Init(&tim6_jitter_ctx, 1000U); /* ideal period: 1 ms */
 }
 
 /* Main execution loop.
@@ -61,8 +61,6 @@ void FM_MAIN_Main(void)
 {
     char msg[] = "Entry: FM_MAIN_Main\n";
     int led_signal_toggle = 0;
-    uint32_t jitters = 0;
-
     FM_MAIN_Init();
 
 
@@ -86,10 +84,9 @@ void FM_MAIN_Main(void)
     __HAL_TIM_ENABLE_IT(&htim6, TIM_IT_UPDATE);
     HAL_NVIC_EnableIRQ(TIM6_IRQn);
 
-    /* Inicializa y configura el generador de carga del depurador (TIM7) */
-    FM_DEBUG_LoadGenInit();
-    FM_DEBUG_LoadGenConfigure(10000U, 90U, 6U);
-    FM_DEBUG_LoadGenStart();
+    /* Configura y arranca TIM7 como generador de carga */
+    FM_BOARD_TIMERS_ConfigLoadTimer(10000U, 1U);
+    FM_BOARD_TIMERS_StartLoadTimer();
 
     FM_DEBUG_UartMsg(msg, strlen(msg));
 
@@ -98,8 +95,12 @@ void FM_MAIN_Main(void)
         led_signal_toggle ^= 1;
         FM_DEBUG_LedSignal(led_signal_toggle);
 
-        jitters = FM_DEBUG_ErrorCount(FM_DEBUG_ERR_JITTER);
-        FM_DEBUG_UartInt32(jitters);
+        fm_debug_error_t last = FM_DEBUG_LastError();
+        int32_t val_us = FM_DEBUG_ErrorParam(last);
+        const char *txt = FM_DEBUG_ErrorString(last);
+        FM_DEBUG_UartMsg(txt, strlen(txt));
+        FM_DEBUG_UartMsg(": ", 2);
+        FM_DEBUG_UartInt32(val_us);
 
         HAL_Delay(1000);
     }
@@ -114,31 +115,17 @@ void FM_MAIN_Main(void)
  */
 void TIM6_IRQHandler(void)
 {
-    static uint32_t prev_tick_cycles = 0;
-    static uint8_t has_reference = 0;
-    const uint32_t period_cycles_local = period_cycles; /* precomputed: 1 ms in cycles */
-
     if (TIM6->SR & TIM_SR_UIF)
     {
-        uint32_t now_cycles = FM_BOARD_DWT_GetCycles();
+        int32_t error_us;
 
-        if (!has_reference)
+        if (FM_JitterMeter_Sample(&tim6_jitter_ctx, &error_us))
         {
-            prev_tick_cycles = now_cycles; /* prime reference */
-            has_reference = 1U;
-            TIM6->SR &= ~TIM_SR_UIF;
-            return;
-        }
-
-        int32_t interval_cycles = (int32_t)(now_cycles - prev_tick_cycles);
-        prev_tick_cycles = now_cycles; /* store for next tick */
-
-        int32_t err_cycles = interval_cycles - (int32_t)period_cycles_local; /* current-interval error */
-
-        if ((err_cycles >= (int32_t)cycles_per_us)
-            || (err_cycles <= -(int32_t)cycles_per_us))
-        {
-            FM_DEBUG_ReportError(FM_DEBUG_ERR_JITTER);
+            if ((error_us >= (int32_t)JITTER_THRESHOLD_US)
+                || (error_us <= -(int32_t)JITTER_THRESHOLD_US))
+            {
+                FM_DEBUG_ReportErrorWithParam(FM_DEBUG_ERR_JITTER, error_us);
+            }
         }
 
         TIM6->SR &= ~TIM_SR_UIF;

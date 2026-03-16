@@ -15,7 +15,6 @@
 #include "main.h"
 #include "fm_board_gpio.h"
 #include "fm_board_uart.h"
-#include "fm_board_dwt.h"
 #include "fm_debug.h"
 
 /* Private Defines */
@@ -31,14 +30,20 @@
 static volatile bool fm_debug_msg_enable = false;
 static volatile bool fm_debug_leds_enable = false;
 static char msg_buffer[MSG_BUFFER_LENGTH];
-static TIM_HandleTypeDef s_loadgen_htim;
-static uint32_t s_loadgen_workload_cycles = 0U;
-
 /* Error tracking */
 static volatile uint32_t fm_debug_error_counts[FM_DEBUG_ERR_COUNT] =
 { 0U };
 static volatile uint32_t fm_debug_error_mask = 0U;
 static volatile fm_debug_error_t fm_debug_last_error = FM_DEBUG_ERR_NONE;
+static volatile int32_t fm_debug_error_param[FM_DEBUG_ERR_COUNT] =
+{ 0 };
+static const char *fm_debug_error_str[FM_DEBUG_ERR_COUNT] =
+{
+    "NONE",
+    "JITTER",
+    "OVERRUN",
+    "TIMEOUT"
+};
 
 /* Private Prototypes */
 /* (none) */
@@ -92,16 +97,7 @@ bool FM_DEBUG_LedsAreEnabled(void)
  */
 void FM_DEBUG_ReportError(fm_debug_error_t err)
 {
-	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
-	{
-		return;
-	}
-
-	fm_debug_error_counts[err]++;
-	fm_debug_last_error = err;
-	fm_debug_error_mask |= (1UL << (uint32_t) err);
-
-	FM_DEBUG_LedError(FM_DEBUG_LED_ON);
+	FM_DEBUG_ReportErrorWithParam(err, 0);
 }
 
 /**
@@ -143,6 +139,7 @@ void FM_DEBUG_ClearErrors(void)
 	for (i = 0U; i < (uint32_t) FM_DEBUG_ERR_COUNT; i++)
 	{
 		fm_debug_error_counts[i] = 0U;
+		fm_debug_error_param[i] = 0;
 	}
 
 	fm_debug_error_mask = 0U;
@@ -250,6 +247,41 @@ bool FM_DEBUG_UartUint32(uint32_t num)
 
 }
 
+void FM_DEBUG_ReportErrorWithParam(fm_debug_error_t err, int32_t param)
+{
+	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+	{
+		return;
+	}
+
+	fm_debug_error_counts[err]++;
+	fm_debug_last_error = err;
+	fm_debug_error_mask |= (1UL << (uint32_t) err);
+	fm_debug_error_param[err] = param;
+
+	FM_DEBUG_LedError(FM_DEBUG_LED_ON);
+}
+
+int32_t FM_DEBUG_ErrorParam(fm_debug_error_t err)
+{
+	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+	{
+		return 0;
+	}
+
+	return fm_debug_error_param[err];
+}
+
+const char *FM_DEBUG_ErrorString(fm_debug_error_t err)
+{
+	if ((err < FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+	{
+		return "UNKNOWN";
+	}
+
+	return fm_debug_error_str[err];
+}
+
 /**
  * @brief Sends a signed 32-bit integer over the debug UART.
  *
@@ -296,61 +328,5 @@ bool FM_DEBUG_UartFloat(float num)
 
 }
 
-void FM_DEBUG_LoadGenInit(void)
-{
-	__HAL_RCC_TIM7_CLK_ENABLE();
-
-	s_loadgen_htim.Instance = TIM7;
-	s_loadgen_htim.Init.Prescaler = 0U;
-	s_loadgen_htim.Init.CounterMode = TIM_COUNTERMODE_UP;
-	s_loadgen_htim.Init.Period = 0U;
-	s_loadgen_htim.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	s_loadgen_htim.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
-	(void) HAL_TIM_Base_Init(&s_loadgen_htim);
-}
-
-void FM_DEBUG_LoadGenConfigure(uint32_t interval_us, uint32_t workload_cycles, uint32_t priority)
-{
-	uint32_t prescaler = (FM_BOARD_DWT_GetCpuHz() / 1000000U) - 1U;
-	uint32_t period = (interval_us > 0U) ? (interval_us - 1U) : 0U;
-
-	s_loadgen_htim.Init.Prescaler = prescaler;
-	s_loadgen_htim.Init.CounterMode = TIM_COUNTERMODE_UP;
-	s_loadgen_htim.Init.Period = period;
-	s_loadgen_htim.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	s_loadgen_htim.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
-	(void) HAL_TIM_Base_Init(&s_loadgen_htim);
-
-	s_loadgen_workload_cycles = workload_cycles;
-
-	HAL_NVIC_SetPriority(TIM7_IRQn, priority, 0);
-}
-
-void FM_DEBUG_LoadGenStart(void)
-{
-	__HAL_TIM_CLEAR_IT(&s_loadgen_htim, TIM_IT_UPDATE);
-	(void) HAL_TIM_Base_Start_IT(&s_loadgen_htim);
-	HAL_NVIC_EnableIRQ(TIM7_IRQn);
-}
-
-void FM_DEBUG_LoadGenStop(void)
-{
-	(void) HAL_TIM_Base_Stop_IT(&s_loadgen_htim);
-	HAL_NVIC_DisableIRQ(TIM7_IRQn);
-}
-
 /* Interrupts */
-void TIM7_IRQHandler(void)
-{
-	if ((TIM7->SR & TIM_SR_UIF) != 0U)
-	{
-		for (volatile uint32_t i = 0U; i < s_loadgen_workload_cycles; i++)
-		{
-			__NOP();
-		}
-
-		TIM7->SR &= ~TIM_SR_UIF;
-	}
-}
+/* (none) */

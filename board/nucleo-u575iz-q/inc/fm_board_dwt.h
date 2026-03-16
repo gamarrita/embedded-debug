@@ -14,6 +14,8 @@
 bool FM_BOARD_DWT_Init(void);
 uint32_t FM_BOARD_DWT_GetCpuHz(void);
 uint32_t FM_BOARD_DWT_CyclesPerUs(void);
+uint32_t FM_BOARD_DWT_UsToCycles(uint32_t us);
+int32_t FM_BOARD_DWT_CyclesToUs(int32_t cycles);
 
 static inline uint32_t FM_BOARD_DWT_GetCycles(void)
 {

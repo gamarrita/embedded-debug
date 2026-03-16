@@ -110,30 +110,9 @@ uint32_t FM_DEBUG_ErrorMask(void);
  */
 void FM_DEBUG_ClearErrors(void);
 
-/**
- * @brief Inicializa el generador de carga (TIM7). Llamar una vez antes de configurar.
- */
-void FM_DEBUG_LoadGenInit(void);
-
-/**
- * @brief Configura el generador de carga.
- * @param interval_us     Período de interrupción en microsegundos (TIM7).
- * @param workload_cycles Número de iteraciones del bucle NOP en la ISR.
- * @param priority        Prioridad de la interrupción (0 = más alta en HAL).
- */
-void FM_DEBUG_LoadGenConfigure(uint32_t interval_us,
-                               uint32_t workload_cycles,
-                               uint32_t priority);
-
-/**
- * @brief Arranca el temporizador de carga y habilita su IRQ.
- */
-void FM_DEBUG_LoadGenStart(void);
-
-/**
- * @brief Detiene el temporizador de carga y deshabilita su IRQ.
- */
-void FM_DEBUG_LoadGenStop(void);
+void FM_DEBUG_ReportErrorWithParam(fm_debug_error_t err, int32_t param);
+int32_t FM_DEBUG_ErrorParam(fm_debug_error_t err);
+const char *FM_DEBUG_ErrorString(fm_debug_error_t err);
 
 /* ===== Compile-time control ===== */
 
