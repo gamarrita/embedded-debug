@@ -22,10 +22,10 @@ bool FM_JitterMeter_Sample(FM_JitterMeter_t *ctx, int32_t *error_us)
 
     uint32_t now_cycles = FM_BOARD_DWT_GetCycles();
 
-    if (ctx->has_reference == 0U)
+    if (ctx->has_reference == 0)
     {
         ctx->prev_cycles = now_cycles; /* prime reference */
-        ctx->has_reference = 1U;
+        ctx->has_reference = 1;
         return false;
     }
 
