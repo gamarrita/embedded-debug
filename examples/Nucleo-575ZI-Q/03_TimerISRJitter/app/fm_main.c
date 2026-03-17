@@ -36,6 +36,7 @@
 
 #define TIM6_SELF_LOAD_US         (40U)
 #define REPORT_INTERVAL_MS        (1000U)
+#define REPORT_POLL_MS            (10U)
 
 /* Module configuration */
 /* =========================== Private Types ================================ */
@@ -102,31 +103,38 @@ void FM_MAIN_Main(void)
     }
 
     /* Validation selector: choose one of the scenarios below */
-    const uint32_t sel = 0U;
+    const uint32_t sel = 1U;
     s_validation_sel = sel;
 
     switch (sel)
 	{
 		case 0U:
-			/* Case 0: baseline, no extra load. Expect near-zero jitter and zero violations. */
+			/* Case 0: baseline, no extra load.
+			 * Expect: jitter last/min/max ≈ 0..±2 us, exec ≈ 2–5 us, violations = 0. */
 			(void) FM_BOARD_TIMERS_StopLoadTimer();
 			break;
 		case 1U:
-		    /* Case 1: short periodic load (TIM7) to create occasional jitter spikes. */
+		    /* Case 1: short periodic load (TIM7) every 10 ms, ~50 us busy time.
+		     * Expect: occasional +40..+60 us jitter when TIM7 overlaps TIM6 (about 1 in 10 samples),
+		     * exec similar to baseline, violations small but non-zero. */
 		    if (FM_BOARD_TIMERS_ConfigLoadTimer(TIM7_LOAD_SHORT_INT_US, TIM7_LOAD_SHORT_WORK_US))
 		    {
 		        (void) FM_BOARD_TIMERS_StartLoadTimer();
 		    }
 			break;
 		case 2U:
-		    /* Case 2: heavier periodic load; expect more violations and wider jitter spread. */
+		    /* Case 2: heavier periodic load (TIM7) every 5 ms, ~150 us busy time.
+		     * Expect: frequent +120..+170 us jitter spikes (roughly 1 in 5 samples),
+		     * exec near baseline, violations noticeably higher than case 1. */
 		    if (FM_BOARD_TIMERS_ConfigLoadTimer(TIM7_LOAD_HEAVY_INT_US, TIM7_LOAD_HEAVY_WORK_US))
 		    {
 		        (void) FM_BOARD_TIMERS_StartLoadTimer();
 		    }
 			break;
         case 3U:
-            /* Case 3: self-load inside TIM6 ISR to validate execution-time tracking. */
+            /* Case 3: self-load inside TIM6 ISR (~40 us of NOPs).
+             * Expect: exec last/max ≈ 40–50 us (baseline + load), jitter may widen a little,
+             * violations should stay low unless the added exec pushes into the next tick. */
             (void) FM_BOARD_TIMERS_StopLoadTimer();
             tim6_self_load_cycles = FM_BOARD_DWT_UsToCycles(TIM6_SELF_LOAD_US);
             if (tim6_self_load_cycles == 0U)
@@ -154,7 +162,7 @@ void FM_MAIN_Main(void)
         FM_DEBUG_LedSignal((led_signal_toggle != 0U) ? FM_DEBUG_LED_ON : FM_DEBUG_LED_OFF);
 
         uint32_t now_ms = HAL_GetTick();
-        if ((now_ms - last_report_ms) >= REPORT_INTERVAL_MS)
+        if ((int32_t)(now_ms - last_report_ms) >= (int32_t) REPORT_INTERVAL_MS)
         {
             fm_irq_health_stats_t stats;
             FM_IRQ_HEALTH_GetStats(&tim6_irq_health, &stats);
@@ -176,10 +184,11 @@ void FM_MAIN_Main(void)
             }
 
             FM_IRQ_HEALTH_ResetStats(&tim6_irq_health);
-            last_report_ms = now_ms;
+            /* Keep the 1 s gate aligned to the original schedule to minimize drift. */
+            last_report_ms += REPORT_INTERVAL_MS;
         }
 
-        HAL_Delay(100);
+        HAL_Delay(REPORT_POLL_MS);
     }
 }
 

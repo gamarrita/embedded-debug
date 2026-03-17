@@ -21,8 +21,10 @@ bool FM_BOARD_TIMERS_ConfigLoadTimer(uint32_t interval_us,
  */
 bool FM_BOARD_TIMERS_StartLoadTimer(void);
 /**
- * @brief Detiene TIM7 y deshabilita su interrupcion.
+ * @brief Detiene TIM7 y deshabilita su interrupcion (no hace nada si no fue configurado).
  */
 bool FM_BOARD_TIMERS_StopLoadTimer(void);
 
 #endif /* FM_BOARD_TIMERS_H */
+
+

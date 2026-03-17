@@ -62,6 +62,12 @@ bool FM_BOARD_TIMERS_StartLoadTimer(void)
 
 bool FM_BOARD_TIMERS_StopLoadTimer(void)
 {
+    /* Gracefully handle the case where TIM7 was never configured. */
+    if (s_tim7_handle.Instance != TIM7)
+    {
+        return true; /* Already stopped or not configured. */
+    }
+
     if (HAL_TIM_Base_Stop_IT(&s_tim7_handle) != HAL_OK)
     {
         return false;
@@ -84,3 +90,4 @@ void TIM7_IRQHandler(void)
         }
     }
 }
+
