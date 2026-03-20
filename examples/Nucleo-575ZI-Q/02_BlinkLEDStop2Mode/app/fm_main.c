@@ -16,9 +16,6 @@
 #include "main.h"
 #include "fm_main.h"
 #include "fm_debug.h"
-#include "fm_board_gpio.h"
-#include "fm_board_timers.h"
-#include "fm_board_uart.h"
 #include "fm_board.h"
 
 /* =========================== Private Defines ============================== */
@@ -47,6 +44,7 @@ void FM_MAIN_Init(void)
     /* Application-level initialization.
      Keep this module as the owner of the main control flow. */
 	FM_BOARD_Init();
+	FM_DEBUG_Init();
 }
 
 
@@ -65,7 +63,7 @@ void FM_MAIN_Main(void)
     {
     	FM_DEBUG_LedRun(FM_DEBUG_LED_ON);
     	FM_DEBUG_UartMsg(p_msg, sizeof(p_msg) - 1);
-        FM_BOARD_TIMERS_DelayMs(100);
+        HAL_Delay(100);
 
 
         FM_DEBUG_LedRun(FM_DEBUG_LED_OFF);
