@@ -67,7 +67,10 @@ void FM_MAIN_Main(void)
 
 void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
 {
+	char msg[] = "Wakeup event!\n";
     UNUSED(hrtc);
+    FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
+
 }
 
 

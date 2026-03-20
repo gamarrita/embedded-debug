@@ -1,16 +1,17 @@
-#include "fm_board_uart.h"
+#include <fm_hw_uart.h>
 #include "main.h"
 
 static UART_HandleTypeDef huart1;
 
-static UART_HandleTypeDef *fm_board_uart_handle(void)
+/* Internal accessor for the configured UART handle. */
+static UART_HandleTypeDef *FM_HW_UART_HandleGet(void)
 {
     return &huart1;
 }
 
-void FM_BOARD_UART_Init(void)
+void FM_HW_UART_Init(void)
 {
-    UART_HandleTypeDef *huart = fm_board_uart_handle();
+    UART_HandleTypeDef *huart = FM_HW_UART_HandleGet();
 
     huart->Instance = USART1;
     huart->Init.BaudRate = 115200;
@@ -42,12 +43,12 @@ void FM_BOARD_UART_Init(void)
     }
 }
 
-bool FM_BOARD_UART_Transmit(const uint8_t *p_data, uint32_t len, uint32_t timeout_ms)
+bool FM_HW_UART_Transmit(const uint8_t *p_data, uint32_t len, uint32_t timeout_ms)
 {
     if ((p_data == NULL) || (len == 0U))
     {
         return false;
     }
 
-    return (HAL_UART_Transmit(fm_board_uart_handle(), (uint8_t *) p_data, len, timeout_ms) == HAL_OK);
+    return (HAL_UART_Transmit(FM_HW_UART_HandleGet(), (uint8_t *) p_data, len, timeout_ms) == HAL_OK);
 }
