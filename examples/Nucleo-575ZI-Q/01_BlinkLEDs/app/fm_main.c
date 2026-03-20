@@ -51,13 +51,12 @@ void FM_MAIN_Main(void)
 	FM_MAIN_Init();
 
 
-
 	fm_debug_led_state_t led_toogle = FM_DEBUG_LED_OFF;
 
     for (;;)
     {
     	led_toogle ^= 1; /* toggle LED state */
-        FM_DEBUG_LedError(led_toogle);
+        FM_DEBUG_LedSignal(led_toogle);
         FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
         HAL_Delay(250);
     }
@@ -65,12 +64,12 @@ void FM_MAIN_Main(void)
 
 /* =========================== Interrupts =================================== */
 
-/*
+
 void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
 {
     UNUSED(hrtc);
 }
-*/
+
 
 
 
