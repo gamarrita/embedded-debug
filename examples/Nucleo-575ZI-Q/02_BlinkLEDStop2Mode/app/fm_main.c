@@ -55,22 +55,17 @@ void FM_MAIN_Init(void)
  */
 void FM_MAIN_Main(void)
 {
-
-	char p_msg[] = "MCU Run\n";
 	FM_MAIN_Init();
 
     for (;;)
     {
     	FM_DEBUG_LedRun(FM_DEBUG_LED_ON);
-    	FM_DEBUG_UartMsg(p_msg, sizeof(p_msg) - 1);
-        HAL_Delay(100);
-
-
+    	FM_DEBUG_Flush();
         FM_DEBUG_LedRun(FM_DEBUG_LED_OFF);
+
         HAL_SuspendTick();
         HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
         HAL_ResumeTick();
-
     }
 }
 
@@ -84,10 +79,9 @@ void FM_MAIN_Main(void)
  */
 void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
 {
-	char p_msg[] = "RTC Wake Up\n";
     /* Prevent unused argument(s) compilation warning */
     UNUSED(hrtc);
-    FM_DEBUG_UartMsg(p_msg, sizeof(p_msg) - 1);
+    FM_DEBUG_LogConstISR("Wakeup event");
 }
 
 /*** end of file ***/

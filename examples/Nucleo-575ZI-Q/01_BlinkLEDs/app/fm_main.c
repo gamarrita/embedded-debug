@@ -47,7 +47,7 @@ void FM_MAIN_Init(void)
  */
 void FM_MAIN_Main(void)
 {
-	char msg[] = "Debugging!!!\n";
+	char msg[] = "Go to simulated sleep 2sec!!!\n";
 	FM_MAIN_Init();
 
 
@@ -55,10 +55,19 @@ void FM_MAIN_Main(void)
 
     for (;;)
     {
+    	// LED blink
     	led_toogle ^= 1; /* toggle LED state */
         FM_DEBUG_LedSignal(led_toogle);
+
+        // Bloking UART message (legacy helper, not IRQ-safe)
         FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
-        HAL_Delay(250);
+
+        // Sleep
+        HAL_Delay(2000);
+
+        // Flush any pending debug events (ISR-safe logging is deferred until flush).
+        FM_DEBUG_Flush();
+
     }
 }
 
@@ -67,10 +76,13 @@ void FM_MAIN_Main(void)
 
 void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
 {
-	char msg[] = "Wakeup event!\n";
     UNUSED(hrtc);
-    FM_DEBUG_UartMsg(msg, sizeof(msg) - 1U);
 
+    {
+        UNUSED(hrtc);
+        /* Non-blocking ISR log: event will be flushed later by foreground code. */
+        FM_DEBUG_LogConstISR("Wakeup event");
+    }
 }
 
 

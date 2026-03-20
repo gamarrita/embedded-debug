@@ -3,27 +3,11 @@
  * @brief   Debug services: event capture, logging, LEDs, and counters.
  *
  * @details
- *  - Captures compact events (ISR-safe) into a fixed ring buffer.
- *  - Optional DWT timestamping.
- *  - Flushes buffered events over UART in non-critical context.
- *  - Keeps legacy LED control and error counters as support features.
- *
- * @section fm_debug_usage_pattern Usage pattern
- *  - Boot: call FM_DEBUG_Init() then FM_DEBUG_RefreshJumpers().
- *  - ISR: enqueue via FM_DEBUG_LogISR / FM_DEBUG_Log2ISR / FM_DEBUG_LogConstISR (no formatting/UART).
- *  - Foreground: periodically call FM_DEBUG_Flush() outside ISRs to drain the ring.
- *  - Metrics: inspect FM_DEBUG_DroppedCount(), FM_DEBUG_HighWatermark(), and FM_DEBUG_Error*() to tune cadence.
- *
- * @section fm_debug_design_model Design model
- *  - ISR-safe capture: fixed-size ring, constant-time enqueue, drop-on-full.
- *  - Deferred flush: snprintf + UART only in foreground.
- *  - Optional timestamps using the board DWT helper when available.
- *  - Lightweight per-error counters and bitmask for quick health snapshots.
- *
- * @section fm_debug_concurrency Concurrency model
- *  - Single producer (ISRs/time-critical code) pushes events.
- *  - Single consumer (foreground) flushes events.
- *  - Lock-free head/tail indices; interrupts are not disabled.
+ *  - ISR-safe producer pushes structured events into a fixed ring (drop-on-full).
+ *  - Foreground consumer formats from the ring into a flush buffer, then UART.
+ *  - Optional DWT timestamps when the board exposes CYCCNT; fall back to 0.
+ *  - Jumper gating controls debug messages and LEDs; cached enables refreshed by caller.
+ *  - Legacy direct UART helpers remain for simple foreground diagnostics.
  */
 
 #include <stdbool.h>
@@ -52,94 +36,223 @@
 #define FM_DEBUG_FLAG_CONST_TEXT   (1U << 1) /* Entry carries a const text pointer instead of params. */
 
 /* Private Types */
+
+/**
+ * @brief Entry stored in the debug ring buffer.
+ *
+ * Each entry represents a debug event captured at runtime.
+ * The entry is designed to be lightweight and ISR-safe to produce.
+ *
+ * Fields:
+ * - ts_cycles: Timestamp in CPU cycles (DWT CYCCNT if available).
+ * - code:      Application-defined event identifier.
+ * - flags:     Optional flags describing the event (context, severity, etc.).
+ * - param0:    First optional numeric parameter.
+ * - param1:    Second optional numeric parameter.
+ * - p_text:    Optional pointer to a constant string (may be NULL).
+ *
+ * Notes:
+ * - p_text is not copied; it must point to persistent memory (e.g. string literal).
+ * - Timestamp resolution and availability depend on DWT support.
+ * - Designed for lock-free or low-overhead logging paths.
+ */
 typedef struct
 {
-	uint32_t ts_cycles;
-	uint16_t code;
-	uint16_t flags;
-	int32_t  param0;
-	int32_t  param1;
-	const char *p_text;
-} fm_debug_ring_entry_t;
+    uint32_t ts_cycles;
+    uint16_t code;
+    uint16_t flags;
+    int32_t  param0;
+    int32_t  param1;
+    const char *p_text;
+} ring_entry_t;
 
 /* Private Data */
-static volatile bool fm_debug_msg_enable = false;
-static volatile bool fm_debug_leds_enable = false;
-static bool fm_debug_dwt_ready = false;
 
-static char msg_buffer[MSG_BUFFER_LENGTH];
-static char fm_debug_flush_buffer[FM_DEBUG_FLUSH_TEXT_MAX];
-
-/* Single-producer (ISR) / single-consumer (flush) ring buffer.
- * Lock-free: head advances in producer, tail in consumer; overflow drops newest.
+/**
+ * @brief Runtime enable flag for debug message output.
+ *
+ * Updated from board-level configuration (e.g. jumper sampling).
+ * May be read from different execution contexts (foreground / ISR),
+ * therefore declared volatile.
  */
-static fm_debug_ring_entry_t fm_debug_ring[FM_DEBUG_EVT_CAPACITY];
-static volatile uint32_t fm_debug_evt_head = 0U;
-static volatile uint32_t fm_debug_evt_tail = 0U;
-static volatile uint32_t fm_debug_evt_dropped = 0U;   /* Count of entries rejected when full. */
-static volatile uint32_t fm_debug_evt_high_water = 0U;/* Max depth observed. */
+static volatile bool msg_enable = false;
+
+/**
+ * @brief Runtime enable flag for debug LED activity.
+ *
+ * Controls whether debug-related LED signaling is active.
+ * May be read from different execution contexts (foreground / ISR),
+ * therefore declared volatile.
+ */
+static volatile bool leds_enable = false;
+
+/**
+ * @brief Indicates whether DWT cycle counter is initialized and usable.
+ *
+ * Set during debug initialization if the target supports DWT CYCCNT.
+ * Used to guard timestamp generation.
+ */
+static bool dwt_ready = false;
+
+
+/**
+ * @brief Temporary formatting buffer for direct UART debug helpers.
+ *
+ * Used by legacy-style functions (e.g. FM_DEBUG_UartUint32/Int32/Float)
+ * that format and transmit messages immediately in foreground context.
+ *
+ * Not used by the ring-buffered logging path.
+ */
+static char msg_buffer[MSG_BUFFER_LENGTH];
+
+/**
+ * @brief Lock-free ring buffer storing raw debug events.
+ *
+ * Acts as the producer/consumer boundary between ISR-safe logging
+ * and deferred formatting/transmission.
+ *
+ * Data flow:
+ *   ISR / time-critical code → enqueue → evt_ring → flush → UART
+ *
+ * Characteristics:
+ * - Stores structured events (no text formatting here).
+ * - Single-producer (ISR) / single-consumer (foreground).
+ * - Lock-free using head/tail indices.
+ * - Drop-on-full to keep ISR execution bounded.
+ */
+static ring_entry_t evt_ring[FM_DEBUG_EVT_CAPACITY];
+
+/**
+ * @brief Temporary text buffer used by the flush (consumer) stage.
+ *
+ * Converts structured ring entries into formatted strings before UART transmission.
+ *
+ * Relationship with evt_ring:
+ * - evt_ring holds raw events.
+ * - This buffer holds the formatted representation of one event at a time.
+ *
+ * Used only in the deferred path:
+ *   evt_ring → snprintf → flush_buffer → UART
+ *
+ * @note Not ISR-safe (uses snprintf and blocking UART).
+ */
+static char flush_buffer[FM_DEBUG_FLUSH_TEXT_MAX];
+
+static volatile uint32_t evt_head = 0U;
+static volatile uint32_t evt_tail = 0U;
+static volatile uint32_t evt_dropped = 0U;   /* Count of entries rejected when full. */
+static volatile uint32_t evt_high_water = 0U;/* Max depth observed. */
 
 /* Error tracking */
-static volatile uint32_t fm_debug_error_counts[FM_DEBUG_ERR_COUNT] = { 0U };
-static volatile uint32_t fm_debug_error_mask = 0U;
-static volatile fm_debug_error_t fm_debug_last_error = FM_DEBUG_ERR_NONE;
-static volatile int32_t fm_debug_error_param[FM_DEBUG_ERR_COUNT] = { 0 };
-static const char *fm_debug_error_str[FM_DEBUG_ERR_COUNT] =
+static volatile uint32_t err_counts[FM_DEBUG_ERR_COUNT] = { 0U };
+static volatile uint32_t err_mask = 0U;
+static volatile fm_debug_error_t last_error = FM_DEBUG_ERR_NONE;
+static volatile int32_t err_param[FM_DEBUG_ERR_COUNT] = { 0 };
+static const char *err_str[FM_DEBUG_ERR_COUNT] =
 {
-	"NONE",
-	"OVERRUN",
-	"TIMEOUT",
-	"BACKEND",
-	"BUFFER_FULL"
+    "NONE",
+    "OVERRUN",
+    "TIMEOUT",
+    "BACKEND",
+    "BUFFER_FULL"
 };
 
 /* Private Prototypes */
-static uint32_t FM_DEBUG_TimestampCyclesInternal(void);
-static bool FM_DEBUG_Enqueue(uint16_t code, uint16_t flags, int32_t param0, int32_t param1, const char *p_text);
+static uint32_t timestamp_cycles(void);
+static bool enqueue_event(uint16_t code, uint16_t flags, int32_t param0, int32_t param1, const char *p_text);
 
 /* Private Bodies */
-static uint32_t FM_DEBUG_TimestampCyclesInternal(void)
+/**
+ * @brief Retrieve a timestamp in CPU cycles for debug events.
+ *
+ * Provides a unified access point for timestamp generation used by the
+ * debug logging system.
+ *
+ * Behavior:
+ * - Returns the current DWT cycle counter when available.
+ * - Returns 0 when DWT is not supported or not initialized.
+ *
+ * Rationale:
+ * - Avoids conditional checks in ISR logging paths.
+ * - Keeps timestamp acquisition lightweight and optional.
+ *
+ * @return Cycle count timestamp, or 0 when not available.
+ */
+static uint32_t timestamp_cycles(void)
 {
-	/* Returns 0 when DWT was not enabled by the board layer. */
-	if (!fm_debug_dwt_ready)
-	{
-		return 0U;
-	}
+    if (!dwt_ready)
+    {
+        return 0U;
+    }
 
-	return FM_BOARD_DwtGetCycles();
+    return FM_BOARD_DwtGetCycles();
 }
 
-static bool FM_DEBUG_Enqueue(uint16_t code, uint16_t flags, int32_t param0, int32_t param1, const char *p_text)
+/**
+ * @brief Enqueue a debug event into the ring buffer (ISR-safe).
+ *
+ * This is the single entry point for logging events into the debug system.
+ * Designed to be callable from ISR or time-critical code paths.
+ *
+ * Behavior:
+ * - Writes a structured event into the ring buffer.
+ * - Does not perform formatting or UART transmission.
+ * - Executes in constant time.
+ *
+ * Concurrency model:
+ * - Single producer (ISR) updates head.
+ * - Single consumer (FM_DEBUG_Flush) updates tail.
+ * - Lock-free; no interrupts are disabled.
+ *
+ * Overflow policy:
+ * - If the buffer is full, the event is dropped.
+ * - A drop counter is incremented.
+ * - The function returns false.
+ *
+ * Parameters:
+ * @param code   Application-defined event identifier.
+ * @param flags  Bitmask describing event format (e.g. param1 valid, const text).
+ * @param param0 First numeric parameter.
+ * @param param1 Second numeric parameter (used if flagged).
+ * @param p_text Optional pointer to constant text (used if flagged).
+ *
+ * @return true if the event was enqueued, false if dropped due to full buffer.
+ *
+ * @note p_text is not copied; it must point to persistent memory.
+ */
+static bool enqueue_event(uint16_t code, uint16_t flags, int32_t param0, int32_t param1, const char *p_text)
 {
-	uint32_t head = fm_debug_evt_head;
-	uint32_t tail = fm_debug_evt_tail;
-	uint32_t queued = head - tail;
+    uint32_t head = evt_head;
+    uint32_t tail = evt_tail;
 
-	if (queued >= FM_DEBUG_EVT_CAPACITY)
-	{
-		/* Drop-on-full to keep ISR bounded and non-blocking. */
-		fm_debug_evt_dropped++;
-		return false;
-	}
+    /* Number of queued elements (wrap-safe due to unsigned arithmetic). */
+    uint32_t queued = head - tail;
 
-	fm_debug_ring_entry_t *p_evt = &fm_debug_ring[head & FM_DEBUG_EVT_MASK];
-	/* No formatting or UART in ISR: just copy fields and advance head. */
-	p_evt->ts_cycles = FM_DEBUG_TimestampCyclesInternal();
-	p_evt->code = code;
-	p_evt->flags = flags;
-	p_evt->param0 = param0;
-	p_evt->param1 = param1;
-	p_evt->p_text = p_text;
+    if (queued >= FM_DEBUG_EVT_CAPACITY)
+    {
+        /* Drop-on-full to keep ISR bounded and non-blocking. */
+        evt_dropped++;
+        return false;
+    }
 
-	fm_debug_evt_head = head + 1U;
+    ring_entry_t *p_evt = &evt_ring[head & FM_DEBUG_EVT_MASK];
+    /* No formatting or UART in ISR: just copy fields and advance head. */
+    p_evt->ts_cycles = timestamp_cycles();
+    p_evt->code = code;
+    p_evt->flags = flags;
+    p_evt->param0 = param0;
+    p_evt->param1 = param1;
+    p_evt->p_text = p_text;
 
-	if ((queued + 1U) > fm_debug_evt_high_water)
-	{
-		/* Track maximum fill level to tune flush rate or buffer size. */
-		fm_debug_evt_high_water = queued + 1U;
-	}
+    evt_head = head + 1U;
 
-	return true;
+    if ((queued + 1U) > evt_high_water)
+    {
+        /* Track maximum fill level to tune flush rate or buffer size. */
+        evt_high_water = queued + 1U;
+    }
+
+    return true;
 }
 
 /* Public Bodies */
@@ -153,14 +266,14 @@ static bool FM_DEBUG_Enqueue(uint16_t code, uint16_t flags, int32_t param0, int3
  */
 void FM_DEBUG_Init(void)
 {
-	fm_debug_dwt_ready = FM_BOARD_DwtInit();
-	fm_debug_evt_head = 0U;
-	fm_debug_evt_tail = 0U;
-	fm_debug_evt_dropped = 0U;
-	fm_debug_evt_high_water = 0U;
+    dwt_ready = FM_BOARD_DwtInit();
+    evt_head = 0U;
+    evt_tail = 0U;
+    evt_dropped = 0U;
+    evt_high_water = 0U;
 
-	FM_DEBUG_ClearErrors();
-	FM_DEBUG_RefreshJumpers();
+    FM_DEBUG_ClearErrors();
+    FM_DEBUG_RefreshJumpers();
 }
 
 /**
@@ -172,38 +285,59 @@ void FM_DEBUG_Init(void)
  */
 bool FM_DEBUG_IsEnabled(void)
 {
-	return (fm_debug_msg_enable || fm_debug_leds_enable);
+    return (msg_enable || leds_enable);
 }
 
 /**
- * @brief Re-sample hardware jumpers or runtime configuration that gate debug output.
+ * @brief Refresh cached debug enable states from board configuration.
  *
- * Call after FM_DEBUG_Init() and whenever jumpers or settings may change.
+ * Re-samples the board-level sources that gate debug output, such as
+ * message-enable and LED-enable jumpers.
+ *
+ * Contract:
+ * - Updates the internal cached enables used by the debug module.
+ * - Does not flush pending events.
+ * - Does not retroactively affect events already stored in the ring buffer.
+ *
+ * Call this after FM_DEBUG_Init() and whenever the external debug
+ * configuration may have changed.
  */
 void FM_DEBUG_RefreshJumpers(void)
 {
-	fm_debug_msg_enable = FM_BOARD_DebugMsgEnabled();
-	fm_debug_leds_enable = FM_BOARD_DebugLedsEnabled();
+    msg_enable = FM_BOARD_DebugMsgEnabled();
+    leds_enable = FM_BOARD_DebugLedsEnabled();
 }
 
 /**
- * @brief Check if buffered debug messages are permitted.
+ * @brief Report whether debug message output is currently permitted.
  *
- * @note Uses last sampled jumper/config; refresh if hardware changes.
+ * Returns the last cached message-enable state sampled by
+ * FM_DEBUG_RefreshJumpers().
+ *
+ * @return true when foreground UART debug output is allowed.
+ *
+ * @note This function does not read hardware directly.
+ *       Call FM_DEBUG_RefreshJumpers() to refresh the cached state.
  */
 bool FM_DEBUG_MsgIsEnabled(void)
 {
-	return fm_debug_msg_enable;
+    return msg_enable;
 }
 
 /**
- * @brief Check if debug LEDs are permitted.
+ * @brief Report whether debug LED signaling is currently permitted.
  *
- * @note Uses last sampled jumper/config; refresh if hardware changes.
+ * Returns the last cached LED-enable state sampled by
+ * FM_DEBUG_RefreshJumpers().
+ *
+ * @return true when debug LED activity is allowed.
+ *
+ * @note This function does not read hardware directly.
+ *       Call FM_DEBUG_RefreshJumpers() to refresh the cached state.
  */
 bool FM_DEBUG_LedsAreEnabled(void)
 {
-	return fm_debug_leds_enable;
+    return leds_enable;
 }
 
 /**
@@ -216,7 +350,7 @@ bool FM_DEBUG_LedsAreEnabled(void)
  */
 void FM_DEBUG_ReportError(fm_debug_error_t err)
 {
-	FM_DEBUG_ReportErrorWithParam(err, 0);
+    FM_DEBUG_ReportErrorWithParam(err, 0);
 }
 
 /**
@@ -229,12 +363,12 @@ void FM_DEBUG_ReportError(fm_debug_error_t err)
  */
 uint32_t FM_DEBUG_ErrorCount(fm_debug_error_t err)
 {
-	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
-	{
-		return 0U;
-	}
+    if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+    {
+        return 0U;
+    }
 
-	return fm_debug_error_counts[err];
+    return err_counts[err];
 }
 
 /**
@@ -244,7 +378,7 @@ uint32_t FM_DEBUG_ErrorCount(fm_debug_error_t err)
  */
 fm_debug_error_t FM_DEBUG_LastError(void)
 {
-	return fm_debug_last_error;
+    return last_error;
 }
 
 /**
@@ -254,7 +388,7 @@ fm_debug_error_t FM_DEBUG_LastError(void)
  */
 uint32_t FM_DEBUG_ErrorMask(void)
 {
-	return fm_debug_error_mask;
+    return err_mask;
 }
 
 /**
@@ -264,18 +398,18 @@ uint32_t FM_DEBUG_ErrorMask(void)
  */
 void FM_DEBUG_ClearErrors(void)
 {
-	uint32_t i;
+    uint32_t i;
 
-	for (i = 0U; i < (uint32_t) FM_DEBUG_ERR_COUNT; i++)
-	{
-		fm_debug_error_counts[i] = 0U;
-		fm_debug_error_param[i] = 0;
-	}
+    for (i = 0U; i < (uint32_t) FM_DEBUG_ERR_COUNT; i++)
+    {
+        err_counts[i] = 0U;
+        err_param[i] = 0;
+    }
 
-	fm_debug_error_mask = 0U;
-	fm_debug_last_error = FM_DEBUG_ERR_NONE;
+    err_mask = 0U;
+    last_error = FM_DEBUG_ERR_NONE;
 
-	FM_BOARD_LedErrorOff();
+    FM_BOARD_LedErrorOff();
 }
 
 /**
@@ -287,48 +421,77 @@ void FM_DEBUG_ClearErrors(void)
  */
 void FM_DEBUG_LedError(fm_debug_led_state_t state)
 {
-	if (state == FM_DEBUG_LED_ON)
+	if(!FM_DEBUG_LedsAreEnabled())
 	{
-		FM_BOARD_LedErrorOn();
+		return;
 	}
-	else
-	{
-		FM_BOARD_LedErrorOff();
-	}
+
+    if (state == FM_DEBUG_LED_ON)
+    {
+        FM_BOARD_LedErrorOn();
+    }
+    else
+    {
+        FM_BOARD_LedErrorOff();
+    }
 }
 
 /**
- * @brief Drive the run/status LED.
+ * @brief Drive the run/status LED through the board layer.
  *
  * @param state Desired LED state.
+ *
+ * Contract:
+ * - Directly forwards the request to the board LED backend.
+ * - Does not check FM_DEBUG_LedsAreEnabled().
+ *
+ * @note Gate this call externally if LED activity must follow the
+ *       current debug-enable configuration.
  */
 void FM_DEBUG_LedRun(fm_debug_led_state_t state)
 {
-	if (state == FM_DEBUG_LED_ON)
+	if(!FM_DEBUG_LedsAreEnabled())
 	{
-		FM_BOARD_LedRunOn();
+		return;
 	}
-	else
-	{
-		FM_BOARD_LedRunOff();
-	}
+
+    if (state == FM_DEBUG_LED_ON)
+    {
+        FM_BOARD_LedRunOn();
+    }
+    else
+    {
+        FM_BOARD_LedRunOff();
+    }
 }
 
 /**
- * @brief Drive the signal/activity LED.
+ * @brief Drive the signal/activity LED through the board layer.
  *
  * @param state Desired LED state.
+ *
+ * Contract:
+ * - Directly forwards the request to the board LED backend.
+ * - Does not check FM_DEBUG_LedsAreEnabled().
+ *
+ * @note Gate this call externally if LED activity must follow the
+ *       current debug-enable configuration.
  */
 void FM_DEBUG_LedSignal(fm_debug_led_state_t state)
 {
-	if (state == FM_DEBUG_LED_ON)
+	if(!FM_DEBUG_LedsAreEnabled())
 	{
-		FM_BOARD_LedSignalOn();
+		return;
 	}
-	else
-	{
-		FM_BOARD_LedSignalOff();
-	}
+
+    if (state == FM_DEBUG_LED_ON)
+    {
+        FM_BOARD_LedSignalOn();
+    }
+    else
+    {
+        FM_BOARD_LedSignalOff();
+    }
 }
 
 /**
@@ -342,19 +505,19 @@ void FM_DEBUG_LedSignal(fm_debug_led_state_t state)
  */
 bool FM_DEBUG_UartMsg(const char *p_msg, uint32_t len)
 {
-	if ((p_msg == NULL) || (len == 0U) || (!fm_debug_msg_enable))
-	{
-		return false;
-	}
+    if ((p_msg == NULL) || (len == 0U) || (!msg_enable))
+    {
+        return false;
+    }
 
-	if (len >= MSG_BUFFER_LENGTH)
-	{
-		len = MSG_BUFFER_LENGTH;
-	}
+    if (len >= MSG_BUFFER_LENGTH)
+    {
+        len = MSG_BUFFER_LENGTH;
+    }
 
-	(void) FM_BOARD_UartTransmit((const uint8_t*) p_msg, len, UART_TIMEOUT_MS);
+    (void) FM_BOARD_UartTransmit((const uint8_t*) p_msg, len, UART_TIMEOUT_MS);
 
-	return true;
+    return true;
 }
 
 /**
@@ -367,19 +530,19 @@ bool FM_DEBUG_UartMsg(const char *p_msg, uint32_t len)
  */
 bool FM_DEBUG_UartUint32(uint32_t num)
 {
-	int len;
-	bool ret;
+    int len;
+    bool ret;
 
-	if (!fm_debug_msg_enable)
-	{
-		return false;
-	}
+    if (!msg_enable)
+    {
+        return false;
+    }
 
-	len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%lu\n", (unsigned long) num);
+    len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%lu\n", (unsigned long) num);
 
-	ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
+    ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
 
-	return ret;
+    return ret;
 }
 
 /**
@@ -392,18 +555,18 @@ bool FM_DEBUG_UartUint32(uint32_t num)
  */
 void FM_DEBUG_ReportErrorWithParam(fm_debug_error_t err, int32_t param)
 {
-	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
-	{
-		return;
-	}
+    if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+    {
+        return;
+    }
 
-	fm_debug_error_counts[err]++;
-	fm_debug_last_error = err;
-	fm_debug_error_mask |= (1UL << (uint32_t) err);
-	fm_debug_error_param[err] = param;
+    err_counts[err]++;
+    last_error = err;
+    err_mask |= (1UL << (uint32_t) err);
+    err_param[err] = param;
 
-	(void) FM_DEBUG_Enqueue((uint16_t) FM_DEBUG_EVT_ERROR, 0U, param, 0, NULL);
-	FM_DEBUG_LedError(FM_DEBUG_LED_ON);
+    (void) enqueue_event((uint16_t) FM_DEBUG_EVT_ERROR, 0U, param, 0, NULL);
+    FM_DEBUG_LedError(FM_DEBUG_LED_ON);
 }
 
 /**
@@ -414,12 +577,12 @@ void FM_DEBUG_ReportErrorWithParam(fm_debug_error_t err, int32_t param)
  */
 int32_t FM_DEBUG_ErrorParam(fm_debug_error_t err)
 {
-	if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
-	{
-		return 0;
-	}
+    if ((err <= FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+    {
+        return 0;
+    }
 
-	return fm_debug_error_param[err];
+    return err_param[err];
 }
 
 /**
@@ -430,12 +593,12 @@ int32_t FM_DEBUG_ErrorParam(fm_debug_error_t err)
  */
 const char *FM_DEBUG_ErrorString(fm_debug_error_t err)
 {
-	if ((err < FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
-	{
-		return "UNKNOWN";
-	}
+    if ((err < FM_DEBUG_ERR_NONE) || (err >= FM_DEBUG_ERR_COUNT))
+    {
+        return "UNKNOWN";
+    }
 
-	return fm_debug_error_str[err];
+    return err_str[err];
 }
 
 /**
@@ -445,19 +608,19 @@ const char *FM_DEBUG_ErrorString(fm_debug_error_t err)
  */
 bool FM_DEBUG_UartInt32(int32_t num)
 {
-	int len;
-	bool ret;
+    int len;
+    bool ret;
 
-	if (!fm_debug_msg_enable)
-	{
-		return false;
-	}
+    if (!msg_enable)
+    {
+        return false;
+    }
 
-	len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%ld\n", (long) num);
+    len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%ld\n", (long) num);
 
-	ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
+    ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
 
-	return ret;
+    return ret;
 }
 
 /**
@@ -467,19 +630,19 @@ bool FM_DEBUG_UartInt32(int32_t num)
  */
 bool FM_DEBUG_UartFloat(float num)
 {
-	int len;
-	bool ret;
+    int len;
+    bool ret;
 
-	if (!fm_debug_msg_enable)
-	{
-		return false;
-	}
+    if (!msg_enable)
+    {
+        return false;
+    }
 
-	len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%0.2f\n", (double) num);
+    len = snprintf(msg_buffer, MSG_BUFFER_LENGTH, "%0.2f\n", (double) num);
 
-	ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
+    ret = FM_DEBUG_UartMsg(msg_buffer, (uint32_t) len);
 
-	return ret;
+    return ret;
 }
 
 /**
@@ -491,7 +654,7 @@ bool FM_DEBUG_UartFloat(float num)
  */
 uint32_t FM_DEBUG_TimestampCycles(void)
 {
-	return FM_DEBUG_TimestampCyclesInternal();
+    return timestamp_cycles();
 }
 
 /**
@@ -505,7 +668,7 @@ uint32_t FM_DEBUG_TimestampCycles(void)
  */
 bool FM_DEBUG_LogISR(uint16_t code, int32_t param0)
 {
-	return FM_DEBUG_Enqueue(code, 0U, param0, 0, NULL);
+    return enqueue_event(code, 0U, param0, 0, NULL);
 }
 
 /**
@@ -518,7 +681,7 @@ bool FM_DEBUG_LogISR(uint16_t code, int32_t param0)
  */
 bool FM_DEBUG_Log2ISR(uint16_t code, int32_t param0, int32_t param1)
 {
-	return FM_DEBUG_Enqueue(code, FM_DEBUG_FLAG_HAS_PARAM1, param0, param1, NULL);
+    return enqueue_event(code, FM_DEBUG_FLAG_HAS_PARAM1, param0, param1, NULL);
 }
 
 /**
@@ -531,42 +694,48 @@ bool FM_DEBUG_Log2ISR(uint16_t code, int32_t param0, int32_t param1)
  */
 bool FM_DEBUG_LogConstISR(const char *p_msg)
 {
-	if (p_msg == NULL)
-	{
-		return false;
-	}
+    if (p_msg == NULL)
+    {
+        return false;
+    }
 
-	return FM_DEBUG_Enqueue((uint16_t) FM_DEBUG_EVT_TEXT, FM_DEBUG_FLAG_CONST_TEXT, 0, 0, p_msg);
+    return enqueue_event((uint16_t) FM_DEBUG_EVT_TEXT, FM_DEBUG_FLAG_CONST_TEXT, 0, 0, p_msg);
 }
 
 /**
- * @brief Number of events dropped because the ring buffer was full.
+ * @brief Return how many events were dropped on enqueue.
  *
- * @return Cumulative drop count since FM_DEBUG_Init().
+ * @return Cumulative number of events rejected because the ring buffer
+ *         was full since the last FM_DEBUG_Init().
  */
 uint32_t FM_DEBUG_DroppedCount(void)
 {
-	return fm_debug_evt_dropped;
+    return evt_dropped;
 }
 
 /**
- * @brief Current number of queued events waiting to be flushed.
+ * @brief Return the current number of pending events in the ring buffer.
  *
- * @return Pending entries in the ring buffer.
+ * @return Number of events queued for later flush.
+ *
+ * @note This is a snapshot value and may change asynchronously as
+ *       producers enqueue new events.
  */
 uint32_t FM_DEBUG_QueuedCount(void)
 {
-	return (fm_debug_evt_head - fm_debug_evt_tail);
+    return (evt_head - evt_tail);
 }
 
 /**
- * @brief Peak queued depth observed since FM_DEBUG_Init().
+ * @brief Return the maximum observed ring-buffer occupancy.
  *
- * @return Maximum ring occupancy recorded.
+ * @return Peak number of queued events observed since FM_DEBUG_Init().
+ *
+ * @note Useful for sizing the event ring and tuning flush cadence.
  */
 uint32_t FM_DEBUG_HighWatermark(void)
 {
-	return fm_debug_evt_high_water;
+    return evt_high_water;
 }
 
 /**
@@ -579,70 +748,78 @@ uint32_t FM_DEBUG_HighWatermark(void)
  */
 void FM_DEBUG_Flush(void)
 {
-	if (!fm_debug_msg_enable)
-	{
-		return;
-	}
+    if (!msg_enable)
+    {
+        return;
+    }
 
-	while (fm_debug_evt_tail != fm_debug_evt_head)
-	{
-		/* Pop one entry; consumer side only advances tail. */
-		fm_debug_ring_entry_t evt = fm_debug_ring[fm_debug_evt_tail & FM_DEBUG_EVT_MASK];
-		fm_debug_evt_tail++;
+    while (evt_tail != evt_head)
+    {
+        /* Pop one entry; consumer side only advances tail. */
+        ring_entry_t evt = evt_ring[evt_tail & FM_DEBUG_EVT_MASK];
+        evt_tail++;
 
-		if ((evt.flags & FM_DEBUG_FLAG_CONST_TEXT) != 0U)
-		{
-			const char *p_text = (evt.p_text != NULL) ? evt.p_text : "";
-			int len = snprintf(fm_debug_flush_buffer, FM_DEBUG_FLUSH_TEXT_MAX,
-					"[%lu] TXT=%s\n",
-					(unsigned long) evt.ts_cycles,
-					p_text);
+        if ((evt.flags & FM_DEBUG_FLAG_CONST_TEXT) != 0U)
+        {
+            const char *p_text = (evt.p_text != NULL) ? evt.p_text : "";
+            int len = snprintf(flush_buffer, FM_DEBUG_FLUSH_TEXT_MAX,
+                    "[%lu] TXT=%s\n",
+                    (unsigned long) evt.ts_cycles,
+                    p_text);
 
-			if (len > 0)
-			{
-				if ((uint32_t) len > FM_DEBUG_FLUSH_TEXT_MAX)
-				{
-					len = (int) FM_DEBUG_FLUSH_TEXT_MAX;
-				}
+            if (len > 0)
+            {
+                if ((uint32_t) len > FM_DEBUG_FLUSH_TEXT_MAX)
+                {
+                    len = (int) FM_DEBUG_FLUSH_TEXT_MAX;
+                }
 
-				(void) FM_BOARD_UartTransmit((const uint8_t *) fm_debug_flush_buffer,
-						(uint32_t) len,
-						UART_TIMEOUT_MS);
-			}
-			continue;
-		}
+                (void) FM_BOARD_UartTransmit((const uint8_t *) flush_buffer,
+                        (uint32_t) len,
+                        UART_TIMEOUT_MS);
+            }
+            continue;
+        }
 
-		int len;
+        int len;
 
-		if ((evt.flags & FM_DEBUG_FLAG_HAS_PARAM1) != 0U)
-		{
-			len = snprintf(fm_debug_flush_buffer, FM_DEBUG_FLUSH_TEXT_MAX,
-					"[%lu] EVT=%u P0=%ld P1=%ld\n",
-					(unsigned long) evt.ts_cycles,
-					(unsigned int) evt.code,
-					(long) evt.param0,
-					(long) evt.param1);
-		}
-		else
-		{
-			len = snprintf(fm_debug_flush_buffer, FM_DEBUG_FLUSH_TEXT_MAX,
-					"[%lu] EVT=%u P0=%ld\n",
-					(unsigned long) evt.ts_cycles,
-					(unsigned int) evt.code,
-					(long) evt.param0);
-		}
+        if ((evt.flags & FM_DEBUG_FLAG_HAS_PARAM1) != 0U)
+        {
+            len = snprintf(flush_buffer, FM_DEBUG_FLUSH_TEXT_MAX,
+                    "[%lu] EVT=%u P0=%ld P1=%ld\n",
+                    (unsigned long) evt.ts_cycles,
+                    (unsigned int) evt.code,
+                    (long) evt.param0,
+                    (long) evt.param1);
+        }
+        else
+        {
+            len = snprintf(flush_buffer, FM_DEBUG_FLUSH_TEXT_MAX,
+                    "[%lu] EVT=%u P0=%ld\n",
+                    (unsigned long) evt.ts_cycles,
+                    (unsigned int) evt.code,
+                    (long) evt.param0);
+        }
 
-		if (len > 0)
-		{
-			if ((uint32_t) len > FM_DEBUG_FLUSH_TEXT_MAX)
-			{
-				len = (int) FM_DEBUG_FLUSH_TEXT_MAX;
-			}
+        if (len > 0)
+        {
+            if ((uint32_t) len > FM_DEBUG_FLUSH_TEXT_MAX)
+            {
+                len = (int) FM_DEBUG_FLUSH_TEXT_MAX;
+            }
 
-			/* Blocking UART transmit and snprintf live here, not in ISR. */
-			(void) FM_BOARD_UartTransmit((const uint8_t *) fm_debug_flush_buffer,
-					(uint32_t) len,
-					UART_TIMEOUT_MS);
-		}
-	}
+            /* Blocking UART transmit and snprintf live here, not in ISR. */
+            (void) FM_BOARD_UartTransmit((const uint8_t *) flush_buffer,
+                    (uint32_t) len,
+                    UART_TIMEOUT_MS);
+        }
+    }
 }
+
+/* Interrupts */
+/* (none) */
+
+
+
+
+
