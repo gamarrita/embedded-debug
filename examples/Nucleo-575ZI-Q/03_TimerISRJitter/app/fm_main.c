@@ -6,29 +6,63 @@
  * @author  Daniel H Sagarra
  *
  * @details
- *  - Fixed section layout (template-friendly).
- *  - Public API: FM_MAIN_*.
- *  - Private symbols: static snake_case.
- *  - ISRs shall remain bounded and non-blocking (set flags only).
+ *  - Initializes board and debug services.
+ *  - Demonstrates deferred debug logging from an RTC wakeup ISR.
+ *  - Main loop flushes queued debug events in foreground context.
+ *  - ISR measures wakeup period and jitter using DWT timestamps.
  */
 
 /* ===========================     Includes    ============================== */
 #include "main.h"
-#include "string.h"
+#include "fm_main.h"
 #include "fm_debug.h"
-#include "stm32u5xx_ll_rcc.h"
+#include "fm_board.h"
 
 /* =========================== Private Defines ============================== */
+/**
+ * @brief Event code used for RTC wakeup jitter measurements.
+ *
+ * Event payload:
+ * - param0: measured interrupt period in CPU cycles
+ * - param1: signed jitter in CPU cycles
+ */
+#define FM_MAIN_EVT_RTC_JITTER   (FM_DEBUG_EVT_USER + 1U)
 
-/* Module configuration */
-#define CPU_CYCLES_PER_US    (24U)
+/**
+ * @brief Expected RTC wakeup period in CPU cycles.
+ *
+ * Example value for a 1 s period at 10 MHz DWT/CPU clock.
+ * Replace with a board-specific conversion if clock changes dynamically.
+ */
+#define RTC_EXPECTED_CYCLES      (24000000U)
 
 /* =========================== Private Types ================================ */
 /* (none) */
 
 /* =========================== Private Data ================================= */
-TIM_HandleTypeDef htim6;
-TIM_HandleTypeDef htim7;
+/**
+ * @brief Foreground notification flag set by the RTC ISR.
+ *
+ * Used only to wake the main loop so it can flush deferred debug events.
+ */
+static volatile bool rtc_flag = false;
+
+/**
+ * @brief Last captured RTC interrupt timestamp in CPU cycles.
+ */
+static uint32_t rtc_last_ts = 0U;
+
+/**
+ * @brief Expected RTC wakeup period in CPU cycles.
+ */
+static uint32_t rtc_expected_cycles = 0U;
+
+/**
+ * @brief Indicates whether a previous timestamp is available.
+ *
+ * The first interrupt only initializes the measurement baseline.
+ */
+static bool rtc_jitter_ready = false;
 
 /* =========================== Private Prototypes =========================== */
 /* (none) */
@@ -37,168 +71,92 @@ TIM_HandleTypeDef htim7;
 /* (none) */
 
 /* =========================== Public Bodies ================================ */
-
+/**
+ * @brief Initialize board services and jitter measurement state.
+ *
+ * Initializes the board layer first, then the debug module, and finally
+ * prepares local state used by the RTC jitter example.
+ */
 void FM_MAIN_Init(void)
 {
-    /* Application-level initialization.
-     * Keep this module as the owner of the main control flow. */
-
+    FM_BOARD_Init();
     FM_DEBUG_Init();
 
+    rtc_expected_cycles = RTC_EXPECTED_CYCLES;
+    rtc_last_ts = 0U;
+    rtc_jitter_ready = false;
+    rtc_flag = false;
 }
 
-/* Main execution loop.
- * Do not place user logic in auto-generated IDE files.
+/**
+ * @brief Main application loop.
  *
+ * Waits for RTC wakeup notifications from the ISR and flushes any deferred
+ * debug events from foreground context.
+ *
+ * @note FM_DEBUG_Flush() is intentionally executed outside interrupt context
+ *       because it performs formatting and blocking UART transmission.
  */
 void FM_MAIN_Main(void)
 {
-    char msg[] = "Entry: FM_MAIN_Main\n";
-    int led_signal_toggle = 0;
-    uint32_t jitters = 0;
-
     FM_MAIN_Init();
-
-    /*
-     * TIM6: reference timer at 1 kHz used to measure interrupt jitter.
-     * Deviation versus the ideal 1 ms period is computed in its ISR using DWT.
-     */
-    __HAL_RCC_TIM6_CLK_ENABLE();
-    htim6.Instance = TIM6;
-    htim6.Init.Prescaler = 239; /* 24 MHz / (239 + 1) = 100 kHz → 10 µs per tick */
-    htim6.Init.Period = 99;     /* 100 kHz / (99 + 1) = 1 kHz → 1 ms period */
-
-    if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
-    {
-        Error_Handler();
-    }
-
-    HAL_TIM_Base_Start(&htim6);
-
-    HAL_NVIC_SetPriority(TIM6_IRQn, 7, 0);
-    __HAL_TIM_ENABLE_IT(&htim6, TIM_IT_UPDATE);
-    HAL_NVIC_EnableIRQ(TIM6_IRQn);
-
-    /*
-     * TIM7: interfering workload timer (~100 Hz).
-     * Injects a bounded ISR load to induce measurable jitter on TIM6.
-     * Tune ARR/PSC or the NOP loop length in TIM7_IRQHandler to change hit rate.
-     */
-    __HAL_RCC_TIM7_CLK_ENABLE();
-    htim7.Instance = TIM7;
-    htim7.Init.Prescaler = 239;  /* 10 µs per tick */
-    htim7.Init.Period = 1000;     /* ~10 ms period (100 Hz) */
-
-    if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
-    {
-        Error_Handler();
-    }
-
-    HAL_TIM_Base_Start(&htim7);
-
-    HAL_NVIC_SetPriority(TIM7_IRQn, 6, 0);
-    __HAL_TIM_ENABLE_IT(&htim7, TIM_IT_UPDATE);
-    HAL_NVIC_EnableIRQ(TIM7_IRQn);
-
-    FM_DEBUG_UartMsg(msg, strlen(msg));
 
     for (;;)
     {
-        led_signal_toggle ^= 1;
-        FM_DEBUG_LedSignal(led_signal_toggle);
-
-        jitters = FM_DEBUG_ErrorCount(FM_DEBUG_ERR_JITTER);
-        FM_DEBUG_UartInt32(jitters);
-
-        HAL_Delay(1000);
-    }
-}
-
-/* =========================== Interrupts =================================== */
-
-/*
- * TIM6 update ISR — per-interval jitter using DWT.
- * Measures current interval vs. ideal 1 ms; flags jitter if |error| > 1 µs.
- * No cumulative drift; only instantaneous latency is considered.
- */
-void TIM6_IRQHandler(void)
-{
-    static uint32_t prev_tick_cycles = 0;
-    static uint8_t has_reference = 0;
-    const uint32_t period_cycles = SystemCoreClock / 1000U; /* 1 ms in cycles */
-
-    if (TIM6->SR & TIM_SR_UIF)
-    {
-        uint32_t now_cycles = DWT->CYCCNT;
-
-        if (!has_reference)
-        {
-            prev_tick_cycles = now_cycles; /* prime reference */
-            has_reference = 1U;
-            TIM6->SR &= ~TIM_SR_UIF;
-            return;
-        }
-
-        int32_t interval_cycles = (int32_t)(now_cycles - prev_tick_cycles);
-        prev_tick_cycles = now_cycles; /* store for next tick */
-
-        int32_t err_cycles = interval_cycles - (int32_t)period_cycles; /* current-interval error */
-
-        if ((err_cycles >= (int32_t)CPU_CYCLES_PER_US)
-            || (err_cycles <= -(int32_t)CPU_CYCLES_PER_US))
-        {
-            FM_DEBUG_LedError(FM_DEBUG_LED_ON);
-            FM_DEBUG_ReportError(FM_DEBUG_ERR_JITTER);
-        }
-
-        TIM6->SR &= ~TIM_SR_UIF;
-    }
-}
-
-/*
- * TIM7 workload ISR — injects controlled latency to create measurable jitter.
- * - Uses DWT to timestamp entry/exit for quick inspection via debugger.
- * - Workload is a short NOP loop; adjust its length or TIM7 frequency to tune jitter rate.
- */
-void TIM7_IRQHandler(void)
-{
-    static volatile uint32_t t_start_cycles = 0;
-    static volatile uint32_t t_end_cycles = 0;
-    static volatile uint32_t t_prev_cycles = 0;
-    static volatile uint32_t t_min_cycles = 0xFFFFFFFFU;
-    static volatile uint32_t t_max_cycles = 0;
-    static volatile uint32_t t_interval_cycles = 0; /* cycles between consecutive TIM7 IRQs */
-    static volatile uint32_t dur_cycles = 0;
-
-    if (TIM7->SR & TIM_SR_UIF)
-    {
-        t_start_cycles = DWT->CYCCNT;
-
-        /* Controlled workload: adjust loop length to tune injected load. */
-        for (volatile uint32_t i = 0; i < 90U; i++)
+        while (!rtc_flag)
         {
             __NOP();
         }
 
-        t_end_cycles = DWT->CYCCNT;
-        t_interval_cycles = t_start_cycles - t_prev_cycles;
-        t_prev_cycles = t_start_cycles;
-        dur_cycles = t_end_cycles - t_start_cycles;
+        rtc_flag = false;
+        FM_DEBUG_Flush();
+    }
+}
 
-        (void)t_interval_cycles; /* used for live debug inspection */
+/* =========================== Interrupts =================================== */
+/**
+ * @brief RTC wakeup callback used to measure interrupt period and jitter.
+ *
+ * This ISR:
+ * - captures the current DWT timestamp
+ * - computes the elapsed period since the previous wakeup
+ * - computes signed jitter against the expected period
+ * - enqueues the measurement using deferred debug logging
+ * - notifies the foreground loop to flush pending events
+ *
+ * Logged event payload:
+ * - param0: measured period in cycles
+ * - param1: signed jitter in cycles
+ */
+void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
+{
+    uint32_t now;
+    uint32_t delta_cycles;
+    int32_t jitter_cycles;
 
-        if (dur_cycles < t_min_cycles)
-        {
-            t_min_cycles = dur_cycles;
-        }
-        if (dur_cycles > t_max_cycles)
-        {
-            t_max_cycles = dur_cycles;
-        }
+    UNUSED(hrtc);
 
-        TIM7->SR &= ~TIM_SR_UIF;
+    now = FM_DEBUG_TimestampCycles();
+
+    /* First sample establishes the timing baseline only. */
+    if (!rtc_jitter_ready)
+    {
+        rtc_last_ts = now;
+        rtc_jitter_ready = true;
+        rtc_flag = true;
+        return;
     }
 
+    delta_cycles = now - rtc_last_ts;
+    rtc_last_ts = now;
+
+    jitter_cycles = (int32_t)delta_cycles - (int32_t)rtc_expected_cycles;
+
+    (void)FM_DEBUG_Log2ISR(FM_MAIN_EVT_RTC_JITTER,
+                           (int32_t)delta_cycles,
+                           jitter_cycles);
+
+    rtc_flag = true;
 }
 
 /*** end of file ***/

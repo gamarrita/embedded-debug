@@ -42,11 +42,19 @@ If a section is unused, include:
 ## 3. Formatting Rules
 
 - Indentation: **4 spaces**, no tabs.
-- Brace style: **K&R**.
+- Brace style: **Allman** (opening brace on new line).
 - Braces required for all `if`, `for`, `while`.
 - One declaration per line.
 - No trailing whitespace.
 - Recommended max line length: 100–120 chars.
+
+Example:
+
+```c
+if (condition)
+{
+    do_action();
+}
 
 Example:
 
@@ -127,17 +135,35 @@ Example:
 
 Private symbols:
 
-- `static snake_case`
+- Must be `static`
+- Use concise `snake_case` without module prefix
+- Names must remain descriptive within module scope
+
+Examples:
+
+- `ring_entry_t`
+- `evt_head`
+- `flush_buffer`
 
 ### 5.2 Types
 
-Use:
+Public types:
 
 - `fm_<name>_t`
 
 Example:
 
 - `fm_status_t`
+
+Private types:
+
+- No module prefix
+- Use descriptive names local to the module
+
+Examples:
+
+- `ring_entry_t`
+- `debug_evt_t`
 
 Enum values:
 
@@ -149,11 +175,17 @@ Enum values:
 - Module prefix required
 - Use numeric suffixes (`U`, `UL`)
 
+Exception:
+
+- Private macros inside `.c` may omit module prefix if:
+  - They are not exposed outside the file
+  - Their meaning is clear within the module
+
 Example:
 
 ```c
-#define FM_MAIN_LED_BLINK_MS   (250U)
-```
+#define EVT_CAPACITY   (64U)
+#define EVT_MASK       (EVT_CAPACITY - 1U)
 
 ---
 
@@ -184,6 +216,8 @@ Allowed only if:
 
 ### 7.1 Encapsulation
 
+- Private data must not be accessed outside the module
+- Do not expose internal buffers or indices
 - `static` by default in `.c`.
 - Only expose minimal API in `.h`.
 

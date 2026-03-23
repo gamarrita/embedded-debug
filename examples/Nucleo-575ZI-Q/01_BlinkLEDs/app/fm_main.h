@@ -16,24 +16,8 @@
 #define FM_MAIN_H_
 
 /* =========================== Includes ==================================== */
+#include "main.h"
 #include <stdint.h>
-#include <stdbool.h>
-// #include "fmx.h"     // Si el main necesita tipos RTOS públicos
-// #include "fm_log.h" // Si el main llama a módulos de log
-
-/* =========================== Public Macros ================================ */
-// Ejemplos de sufijos de unidad
-#define FM_MAIN_LOOP_PERIOD_MS        (10u)     // periodo del bucle principal
-#define FM_MAIN_WATCHDOG_TIMEOUT_SEC  (2u)      // tiempo de watchdog
-#define FM_MAIN_STACK_SIZE_BYTES      (2048u)   // stack de un hilo, en bytes
-
-/* =========================== Public Types ================================= */
-// Tipos públicos del módulo, con prefijo en minúsculas y sufijo _t
-typedef enum
-{
-    FM_MAIN_OK = 0,
-    FM_MAIN_ERROR
-} fm_main_status_t;
 
 /* =========================== Public API =================================== */
 /**
@@ -46,6 +30,11 @@ void FM_MAIN_Init(void);
  * @note   Si usás ThreadX, este loop puede quedar mínimo y ceder control a hilos.
  */
 void FM_MAIN_Main(void);
+
+/**
+ * @brief  Callback invoked by board layer on RTC WakeUp event.
+ */
+void FM_MAIN_OnRtcWakeup(void);
 
 #endif /* FM_MAIN_H_ */
 

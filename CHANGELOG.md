@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0]
+
+### Added
+- Board layer for Nucleo-U575ZI-Q (`board/nucleo-u575iz-q`): owns GPIO init, forces LEDs to push-pull low on boot, and samples debug jumpers with temporary pull-up to avoid static current.
+- `fm_debug` now delegates LEDs and jumpers to the board API, removing direct CubeMX GPIO accesses.
+- New starter example `examples/Nucleo-575ZI-Q/04_SendWithDMA` as baseline for UART DMA work.
+
 ## [0.2.0] - 2026-03-07
 
 ### Added
