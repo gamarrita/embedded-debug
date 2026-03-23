@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.0]
 
 ### Added
 - Board layer for Nucleo-U575ZI-Q (`board/nucleo-u575iz-q`): owns GPIO init, forces LEDs to push-pull low on boot, and samples debug jumpers with temporary pull-up to avoid static current.
