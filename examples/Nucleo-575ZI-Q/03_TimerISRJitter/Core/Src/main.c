@@ -1,7 +1,7 @@
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
-  * @file           : main.c
+  * @file           : fm_main.c
   * @brief          : Main program body
   ******************************************************************************
   * @attention
@@ -20,6 +20,7 @@
 #include "main.h"
 #include "icache.h"
 #include "rtc.h"
+#include "tim.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -93,12 +94,15 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_ICACHE_Init();
   MX_RTC_Init();
+  MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+
   while (1)
   {
 	  	 FM_MAIN_Main();
