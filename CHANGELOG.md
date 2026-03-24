@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0]
+
+### Changed
+- Rewrote the top-level `README.md` to explain the deferred ISR-safe logging model more clearly, contrast it with blocking `printf()` logging, and point readers to the most relevant examples.
+- Added `examples/Nucleo-575ZI-Q/03_TimerISRJitter/README.md` with a concise explanation of the example flow, UART output format, and dropped-event summary lines.
+
 ## [0.3.0]
 
 ### Added

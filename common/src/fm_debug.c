@@ -28,7 +28,7 @@
 /* Private Defines */
 #define MSG_BUFFER_LENGTH        (96U)
 #define UART_TIMEOUT_MS          (10U)
-#define FM_DEBUG_EVT_CAPACITY    (64U)  /* Power-of-two for fast masking. */
+#define FM_DEBUG_EVT_CAPACITY    (8U)  /* Power-of-two for fast masking. */
 #define FM_DEBUG_EVT_MASK        (FM_DEBUG_EVT_CAPACITY - 1U)
 #define FM_DEBUG_FLUSH_TEXT_MAX  (128U)
 
